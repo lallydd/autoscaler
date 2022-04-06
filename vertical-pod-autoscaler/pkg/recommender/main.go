@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input"
+	"os"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -78,7 +79,7 @@ func main() {
 	klog.InitFlags(nil)
 	kube_flag.InitFlags()
 	klog.V(1).Infof("Vertical Pod Autoscaler %s Recommender: %v", common.VerticalPodAutoscalerVersion, DefaultRecommenderName)
-
+	klog.V(1).Infof("Flags: %v", os.Args)
 	config := common.CreateKubeConfigOrDie(*kubeconfig, float32(*kubeApiQps), int(*kubeApiBurst))
 
 	model.InitializeAggregationsConfig(model.NewAggregationsConfig(*memoryAggregationInterval, *memoryAggregationIntervalCount, *memoryHistogramDecayHalfLife, *cpuHistogramDecayHalfLife))

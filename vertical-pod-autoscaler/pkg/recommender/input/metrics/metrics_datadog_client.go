@@ -18,12 +18,13 @@ package metrics
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	datadog "github.com/DataDog/datadog-api-client-go/api/v1/datadog"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	types "k8s.io/apimachinery/pkg/types"
+	"k8s.io/klog/v2"
 	"k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	"k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1alpha1"
 	_ "k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1beta1"
@@ -53,7 +54,8 @@ type ddclientPodMetrics struct {
 }
 
 func (d ddclientMetrics) PodMetricses(namespace string) resourceclient.PodMetricsInterface {
-	return &ddclientPodMetrics{Namespace: namespace, Client: d.Client, QueryInterval: d.QueryInterval, ClusterName: d.ClusterName}
+	klog.Infof("ddclientMetrics.PodMetricses(namespace:%s)", namespace)
+	return &ddclientPodMetrics{Context: d.Context, Namespace: namespace, Client: d.Client, QueryInterval: d.QueryInterval, ClusterName: d.ClusterName}
 }
 
 func (d ddclientPodMetrics) queryMetrics(queryStr string) (datadog.MetricsQueryResponse, error) {
@@ -61,8 +63,10 @@ func (d ddclientPodMetrics) queryMetrics(queryStr string) (datadog.MetricsQueryR
 		queryStr)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error when calling `MetricsApi.QueryMetrics`: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error when calling `MetricsApi.QueryMetrics` on %s: %v\n", queryStr, err)
 		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
+	} else {
+		klog.V(1).Infof("queryMetrics('%s'): got response with %d series from %d to %d", queryStr, len(resp.GetSeries()), resp.GetFromDate(), resp.GetToDate())
 	}
 
 	return resp, err
@@ -74,13 +78,17 @@ func classifyByTag(values []datadog.MetricsQueryMetadata, tag string, emptyTag s
 	result := make(map[string][]datadog.MetricsQueryMetadata)
 	re := regexp.MustCompile(tag + ":(.*)")
 	for _, entity := range values {
+		matched := false
 		for _, ts := range entity.GetTagSet() {
 			match := re.FindStringSubmatch(ts)
-			if match != nil {
-				result[match[0]] = append(result[match[0]], entity)
-			} else {
-				result[emptyTag] = append(result[emptyTag], entity)
+			if len(match) > 0 {
+				result[match[1]] = append(result[match[1]], entity)
+				matched = true
+				break
 			}
+		}
+		if !matched {
+			result[emptyTag] = append(result[emptyTag], entity)
 		}
 	}
 	return result
@@ -96,6 +104,12 @@ func aggregateResourceData(values map[string][]datadog.MetricsQueryMetadata, res
 			for _, row := range *res.Pointlist {
 				timestamp := *row[0]
 				value := transform(res, *row[1])
+				if (*dest)[timestamp] == nil {
+					(*dest)[timestamp] = make(map[string]map[string]float64)
+				}
+				if (*dest)[timestamp][containerName] == nil {
+					(*dest)[timestamp][containerName] = make(map[string]float64)
+				}
 				(*dest)[timestamp][containerName][resourceName] = value
 			}
 		}
@@ -128,11 +142,26 @@ func makeResourceList(cpu float64, mem float64) map[v1.ResourceName]resource.Qua
 // problem of not screwing up something simple and subtle.  So, scan the list for the _most_ recent
 // timestamp on both cpu and rss.
 // Presumes that all values are for the same pod (tag: pod_name).
-func (d ddclientPodMetrics) aggregatePodMetrics(cpuResp []datadog.MetricsQueryMetadata,
+func (d ddclientPodMetrics) aggregatePodMetrics(podName string, cpuResp []datadog.MetricsQueryMetadata,
 	memResp []datadog.MetricsQueryMetadata) *v1beta1.PodMetrics {
 	// Go by container.
 	containersMem := classifyByTag(memResp, "container_name", "unknown-container")
 	containersCpu := classifyByTag(cpuResp, "container_name", "unknown-container")
+
+	// Pull a kube namespace out of the pod tags.
+	podNamespaces := classifyByTag(memResp, "kube_namespace", "")
+	podNamespace := ""
+	// The whole pod (and all its containers) is all in one kube namespace.  Grab the keys out of podNamespaces
+	// and look for one that's nonempty.
+	for ns := range podNamespaces {
+		if len(ns) > len(podNamespace) {
+			podNamespace = ns
+		}
+	}
+
+	if len(podNamespace) == 0 && len(d.Namespace) > 0 {
+		podNamespace = d.Namespace
+	}
 
 	// Map of timestamp -> container_name -> resource (apis.metrics.v1.ResourceName: "cpu", "memory") -> value
 	data := make(ContainerResourceData)
@@ -170,6 +199,7 @@ FindTimestamp:
 		}
 		return &v1beta1.PodMetrics{
 			// Built against golang 1.16.6, no time.UnixMilli yet.
+			ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: podNamespace, UID: types.UID(podNamespace + "." + podName)},
 			Timestamp:  metav1.Time{Time: time.Unix(int64(selection/1000.0), int64(math.Mod(selection, 1000)*1000000))},
 			Window:     metav1.Duration{Duration: time.Second},
 			Containers: containers}
@@ -186,28 +216,36 @@ func (d ddclientPodMetrics) Get(_ context.Context, podName string, _ metav1.GetO
 	//   kubernetes.memory.usage
 	//   kubernetes.memory.rss -- From comment in v1alpha1/types.go:93: "THe memory usage is the memory working set"
 	//   kubernetes.memory.requests
-	cpuResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.cpu.usage.total{kube_cluster_name:%s AND kube_namespace:%s AND pod_name:%s}",
-		d.ClusterName, d.Namespace, podName))
+	nsClause := ""
+	if len(d.Namespace) > 0 {
+		nsClause = fmt.Sprintf(" AND kube_namespace:%s ", d.Namespace)
+	}
+	cpuResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.cpu.usage.total{kube_cluster_name:%s%s AND pod_name:%s}by{kube_namespace,container_name}",
+		d.ClusterName, nsClause, podName))
 	if err != nil {
 		return nil, err
 	}
-	memResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.memory.usage{ kube_cluster_name:%s AND kube_namespace:%s AND pod_name:%s}",
-		d.ClusterName, d.Namespace, podName))
+	memResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.memory.usage{ kube_cluster_name:%s%s AND pod_name:%s}by{kube_namespace,container_name}",
+		d.ClusterName, nsClause, podName))
 	if err != nil {
 		return nil, err
 	}
 
-	return d.aggregatePodMetrics(cpuResp.GetSeries(), memResp.GetSeries()), nil
+	return d.aggregatePodMetrics(podName, cpuResp.GetSeries(), memResp.GetSeries()), nil
 }
 
 func (d ddclientPodMetrics) List(_ context.Context, _ metav1.ListOptions) (*v1beta1.PodMetricsList, error) {
-	cpuResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.cpu.usage.total{kube_cluster_name:%s AND kube_namespace:%s}",
-		d.ClusterName, d.Namespace))
+	nsClause := ""
+	if len(d.Namespace) > 0 {
+		nsClause = fmt.Sprintf(" AND kube_namespace:%s ", d.Namespace)
+	}
+	cpuResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.cpu.usage.total{kube_cluster_name:%s%s}by{kube_namespace,pod_name,container_name}",
+		d.ClusterName, nsClause))
 	if err != nil {
 		return nil, err
 	}
-	memResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.memory.usage{kube_cluster_name:%s AND kube_namespace:%s}",
-		d.ClusterName, d.Namespace))
+	memResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.memory.usage{kube_cluster_name:%s%s}by{kube_namespace,pod_name,container_name}",
+		d.ClusterName, nsClause))
 	if err != nil {
 		return nil, err
 	}
@@ -217,25 +255,33 @@ func (d ddclientPodMetrics) List(_ context.Context, _ metav1.ListOptions) (*v1be
 
 	podItems := make([]v1beta1.PodMetrics, 0, len(podCpus))
 	for podname, cpuVals := range podCpus {
-		podItems = append(podItems, *d.aggregatePodMetrics(cpuVals, podMems[podname]))
+		podItems = append(podItems, *d.aggregatePodMetrics(podname, cpuVals, podMems[podname]))
 	}
 
 	return &v1beta1.PodMetricsList{Items: podItems}, nil
 }
 
 func NewDatadogClient(queryInterval time.Duration, cluster string) resourceclient.PodMetricsesGetter {
-	ctx := datadog.NewDefaultContext(context.Background())
+	apiKey := os.Getenv("DD-API-KEY")
+	appKey := os.Getenv("DD-APPLICATION-KEY")
+	if len(apiKey) < 1 || len(appKey) < 1 {
+		klog.Fatalf("DD-API-KEY and DD-APPLICATION-KEY env vars must both be nonempty")
+	}
+	ctx := context.WithValue(
+		context.Background(),
+		datadog.ContextAPIKeys,
+		map[string]datadog.APIKey{
+			"apiKeyAuth": {
+				Key: apiKey,
+			},
+			"appKeyAuth": {
+				Key: appKey,
+			},
+		},
+	)
+
+	klog.V(2).Infof("NewDatadogClient(%v, %s)", queryInterval, cluster)
 	configuration := datadog.NewConfiguration()
 	apiClient := datadog.NewAPIClient(configuration)
-	// TODO: Take the tags like pod_name and put them in args here, because we take them in as args.
-	resp, r, err := apiClient.MetricsApi.QueryMetrics(ctx, time.Now().AddDate(0, 0, -1).Unix(), time.Now().Unix(), "system.cpu.idle{*}")
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error when calling `MetricsApi.QueryMetrics`: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Full HTTP response: %v\n", r)
-	}
-
-	responseContent, _ := json.MarshalIndent(resp, "", "  ")
-	fmt.Fprintf(os.Stdout, "Response from `MetricsApi.QueryMetrics`:\n%s\n", responseContent)
-	return ddclientMetrics{Client: apiClient, QueryInterval: -queryInterval, ClusterName: cluster}
+	return ddclientMetrics{Context: ctx, Client: apiClient, QueryInterval: -queryInterval, ClusterName: cluster}
 }
