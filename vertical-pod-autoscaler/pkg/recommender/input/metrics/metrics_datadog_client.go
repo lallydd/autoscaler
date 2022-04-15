@@ -30,16 +30,21 @@ import (
 	_ "k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1beta1"
 	resourceclient "k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1beta1"
 	"math"
+	"net/http"
 	"os"
 	"regexp"
 	"sort"
 	"time"
 )
 
+type baseClient interface {
+	QueryMetrics(context context.Context, interval time.Duration, query string) (datadog.MetricsQueryResponse, *http.Response, error)
+}
+
 type ddclientMetrics struct {
 	resourceclient.PodMetricsesGetter
 	Context       context.Context
-	Client        *datadog.APIClient
+	Client        baseClient
 	QueryInterval time.Duration
 	ClusterName   string
 }
@@ -47,7 +52,7 @@ type ddclientMetrics struct {
 type ddclientPodMetrics struct {
 	v1alpha1.PodMetricsInterface
 	Context       context.Context
-	Client        *datadog.APIClient
+	Client        baseClient
 	QueryInterval time.Duration
 	ClusterName   string
 	Namespace     string
@@ -59,8 +64,7 @@ func (d ddclientMetrics) PodMetricses(namespace string) resourceclient.PodMetric
 }
 
 func (d ddclientPodMetrics) queryMetrics(queryStr string) (datadog.MetricsQueryResponse, error) {
-	resp, r, err := d.Client.MetricsApi.QueryMetrics(d.Context, time.Now().Add(d.QueryInterval).Unix(), time.Now().Unix(),
-		queryStr)
+	resp, r, err := d.Client.QueryMetrics(d.Context, d.QueryInterval, queryStr)
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error when calling `MetricsApi.QueryMetrics` on %s: %v\n", queryStr, err)
@@ -261,11 +265,19 @@ func (d ddclientPodMetrics) List(_ context.Context, _ metav1.ListOptions) (*v1be
 	return &v1beta1.PodMetricsList{Items: podItems}, nil
 }
 
-func NewDatadogClient(queryInterval time.Duration, cluster string) resourceclient.PodMetricsesGetter {
+func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, newApiClient func(*datadog.Configuration) baseClient) resourceclient.PodMetricsesGetter {
 	apiKey := os.Getenv("DD-API-KEY")
 	appKey := os.Getenv("DD-APPLICATION-KEY")
 	if len(apiKey) < 1 || len(appKey) < 1 {
-		klog.Fatalf("DD-API-KEY and DD-APPLICATION-KEY env vars must both be nonempty")
+		klog.Fatalf("DD-API-KEY and DD-APPLICATION-KEY env vars must both be nonempty.")
+	}
+	if queryInterval.Seconds() < 1 {
+		klog.Errorf("Interval has to be at least 1 second.")
+		return nil
+	}
+	if len(cluster) < 1 {
+		klog.Errorf("Cluster must be specified.")
+		return nil
 	}
 	ctx := context.WithValue(
 		context.Background(),
@@ -282,6 +294,22 @@ func NewDatadogClient(queryInterval time.Duration, cluster string) resourceclien
 
 	klog.V(2).Infof("NewDatadogClient(%v, %s)", queryInterval, cluster)
 	configuration := datadog.NewConfiguration()
-	apiClient := datadog.NewAPIClient(configuration)
+	apiClient := newApiClient(configuration)
 	return ddclientMetrics{Context: ctx, Client: apiClient, QueryInterval: -queryInterval, ClusterName: cluster}
+}
+
+type clientWrapper struct {
+	baseClient
+	ApiClient datadog.APIClient
+}
+
+func (c clientWrapper) QueryMetrics(context context.Context, interval time.Duration, query string) (datadog.MetricsQueryResponse, *http.Response, error) {
+	return c.ApiClient.MetricsApi.QueryMetrics(context, time.Now().Add(interval).Unix(), time.Now().Unix(), query)
+}
+
+func NewDatadogClient(queryInterval time.Duration, cluster string) resourceclient.PodMetricsesGetter {
+	var wrapFn = func(configuration *datadog.Configuration) baseClient {
+		return &clientWrapper{ApiClient: *datadog.NewAPIClient(configuration)}
+	}
+	return newDatadogClientWithFactory(queryInterval, cluster, wrapFn)
 }
