@@ -18,25 +18,43 @@ import (
 	"time"
 )
 
+var fakeConfigFile string
+
 func TestMain(m *testing.M) {
-	var _ = os.Setenv("DD-API-KEY", "00000000000000000000000000000000")
-	var _ = os.Setenv("DD-APPLICATION-KEY", "0000000000000000000000000000000000000000")
+	// Create a temp file with fake api/app keys and pass its filename around.
+	ofile, err := os.CreateTemp("/tmp", "vpa-test-*.json")
+	if ofile == nil {
+		fmt.Printf("Failed to create necessary temp file: %v, exiting.", err)
+		os.Exit(1)
+	}
+	defer os.Remove(ofile.Name())
+	configValues := make(map[string]string)
+	configValues["apiKeyAuth"] = "00000000000000000000000000000000"
+	configValues["appKeyAuth"] = "0000000000000000000000000000000000000000"
+	bytes, err := json.Marshal(configValues)
+	if err != nil {
+		fmt.Printf("Failed to create temp config file: %v", err)
+		os.Exit(1)
+	}
+	fakeConfigFile = ofile.Name()
+	ofile.Write(bytes)
 	os.Exit(m.Run())
 }
+
 func TestNewDatadogClient(t *testing.T) {
-	if NewDatadogClient(time.Second, "test") == nil {
+	if NewDatadogClient(time.Second, "test", fakeConfigFile) == nil {
 		t.Errorf("Client should have been created with a valid interval and cluster")
 	}
-	if NewDatadogClient(time.Microsecond, "test") != nil {
+	if NewDatadogClient(time.Microsecond, "test", fakeConfigFile) != nil {
 		t.Errorf("Client shouldn't have been created with a smaller query interval than Datadog reports")
 	}
-	if NewDatadogClient(time.Second, "") != nil {
+	if NewDatadogClient(time.Second, "", fakeConfigFile) != nil {
 		t.Errorf("Client shouldn't have been created without a cluster specified")
 	}
 }
 
 func TestDdclientMetrics_PodMetricses(t *testing.T) {
-	ddclient := NewDatadogClient(time.Second, "test")
+	ddclient := NewDatadogClient(time.Second, "test", fakeConfigFile)
 	podMetrics := ddclient.PodMetricses("foo")
 	if podMetrics == nil {
 		t.Errorf("A valid PodMetricses call failed.")
@@ -237,7 +255,7 @@ func TestDdclientPodMetrics_Get(t *testing.T) {
 		"kube_namespace":    "foo",
 		"container_name":    "fruit",
 	})
-	podMetrics := newDatadogClientWithFactory(time.Second, "test", func(config *datadog.Configuration) baseClient {
+	podMetrics := newDatadogClientWithFactory(time.Second, "test", fakeConfigFile, func(config *datadog.Configuration) baseClient {
 		return client
 	})
 	metrics := podMetrics.PodMetricses("foo")

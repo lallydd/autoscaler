@@ -18,8 +18,10 @@ package metrics
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	datadog "github.com/DataDog/datadog-api-client-go/api/v1/datadog"
+	"io/ioutil"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -265,12 +267,27 @@ func (d ddclientPodMetrics) List(_ context.Context, _ metav1.ListOptions) (*v1be
 	return &v1beta1.PodMetricsList{Items: podItems}, nil
 }
 
-func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, newApiClient func(*datadog.Configuration) baseClient) resourceclient.PodMetricsesGetter {
-	apiKey := os.Getenv("DD-API-KEY")
-	appKey := os.Getenv("DD-APPLICATION-KEY")
-	if len(apiKey) < 1 || len(appKey) < 1 {
-		klog.Fatalf("DD-API-KEY and DD-APPLICATION-KEY env vars must both be nonempty.")
+func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, clientApiSecrets string, newApiClient func(*datadog.Configuration) baseClient) resourceclient.PodMetricsesGetter {
+	authData := map[string]string{}
+	authDataJson, err := ioutil.ReadFile(clientApiSecrets)
+	klog.Infof("For clientApiSecrets file %s, Got %d bytes", clientApiSecrets, len(authDataJson))
+	if err != nil {
+		klog.Fatalf("%s: %v", clientApiSecrets, err)
 	}
+
+	err = json.Unmarshal(authDataJson, &authData)
+	if err != nil {
+		klog.Fatalf("%s: %v", clientApiSecrets, err)
+	}
+
+	apiKey, apiOk := authData["apiKeyAuth"]
+	appKey, appOk := authData["appKeyAuth"]
+
+	if !apiOk || !appOk || len(apiKey) < 1 || len(appKey) < 1 {
+		klog.Fatalf("Both apiKeyAuth and appKeyAuth must be set in %s and be valid app/api keys", clientApiSecrets)
+		return nil
+	}
+
 	if queryInterval.Seconds() < 1 {
 		klog.Errorf("Interval has to be at least 1 second.")
 		return nil
@@ -292,6 +309,14 @@ func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, ne
 		},
 	)
 
+	site, siteOk := authData["site"]
+	if siteOk {
+		ctx = context.WithValue(ctx,
+			datadog.ContextServerVariables,
+			map[string]string{
+				"site": site,
+			})
+	}
 	klog.V(2).Infof("NewDatadogClient(%v, %s)", queryInterval, cluster)
 	configuration := datadog.NewConfiguration()
 	apiClient := newApiClient(configuration)
@@ -307,9 +332,9 @@ func (c clientWrapper) QueryMetrics(context context.Context, interval time.Durat
 	return c.ApiClient.MetricsApi.QueryMetrics(context, time.Now().Add(interval).Unix(), time.Now().Unix(), query)
 }
 
-func NewDatadogClient(queryInterval time.Duration, cluster string) resourceclient.PodMetricsesGetter {
+func NewDatadogClient(queryInterval time.Duration, cluster string, clientApiSecrets string) resourceclient.PodMetricsesGetter {
 	var wrapFn = func(configuration *datadog.Configuration) baseClient {
 		return &clientWrapper{ApiClient: *datadog.NewAPIClient(configuration)}
 	}
-	return newDatadogClientWithFactory(queryInterval, cluster, wrapFn)
+	return newDatadogClientWithFactory(queryInterval, cluster, clientApiSecrets, wrapFn)
 }

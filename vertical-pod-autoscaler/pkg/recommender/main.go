@@ -64,7 +64,8 @@ var (
 	ctrNameLabel        = flag.String("container-name-label", "name", `Label name to look for container names`)
 	vpaObjectNamespace  = flag.String("vpa-object-namespace", apiv1.NamespaceAll, "Namespace to search for VPA objects and pod stats. Empty means all namespaces will be used.")
 
-	kubeClusterName = flag.String("dd-cluster-name", ``, `kube_cluster_name to qualify metrics queries to.  Required with no default.`)
+	kubeClusterName  = flag.String("dd-cluster-name", ``, `kube_cluster_name to qualify metrics queries to.  Required with no default.`)
+	clientApiSecrets = flag.String("dd-keys-file", "/etc/datadog-client.json", "JSON file with apiKeyAuth, appKeyAuth keys and values.")
 )
 
 // Aggregation configuration flags
@@ -99,7 +100,7 @@ func main() {
 		if len(*kubeClusterName) < 1 {
 			klog.Fatalf("--dd-cluster-name required for datadog metrics source.")
 		}
-		ddClient := input_metrics.NewMetricsClient(input_metrics.NewDatadogClient(*snapshotHistoryInterval, *kubeClusterName), *vpaObjectNamespace)
+		ddClient := input_metrics.NewMetricsClient(input_metrics.NewDatadogClient(*snapshotHistoryInterval, *kubeClusterName, *clientApiSecrets), *vpaObjectNamespace)
 		metricsClient = &ddClient
 	}
 
