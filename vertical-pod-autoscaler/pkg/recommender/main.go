@@ -20,6 +20,7 @@ import (
 	"flag"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input"
 	"os"
+	"strings"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -65,6 +66,7 @@ var (
 	vpaObjectNamespace  = flag.String("vpa-object-namespace", apiv1.NamespaceAll, "Namespace to search for VPA objects and pod stats. Empty means all namespaces will be used.")
 
 	kubeClusterName  = flag.String("dd-cluster-name", ``, `kube_cluster_name to qualify metrics queries to.  Required with no default.`)
+	extraTags        = flag.String("dd-extra-tags", ``, `Comma-separated list of additional tags to filter metrics with.`)
 	clientApiSecrets = flag.String("dd-keys-file", "/etc/datadog-client.json", "JSON file with apiKeyAuth, appKeyAuth keys and values.")
 )
 
@@ -100,7 +102,11 @@ func main() {
 		if len(*kubeClusterName) < 1 {
 			klog.Fatalf("--dd-cluster-name required for datadog metrics source.")
 		}
-		ddClient := input_metrics.NewMetricsClient(input_metrics.NewDatadogClient(*snapshotHistoryInterval, *kubeClusterName, *clientApiSecrets), *vpaObjectNamespace)
+		var extraApiTags []string = make([]string, 0)
+		if len(*extraTags) > 0 {
+			extraApiTags = strings.Split(*extraTags, ",")
+		}
+		ddClient := input_metrics.NewMetricsClient(input_metrics.NewDatadogClient(*snapshotHistoryInterval, *kubeClusterName, *clientApiSecrets, extraApiTags), *vpaObjectNamespace)
 		metricsClient = &ddClient
 	}
 

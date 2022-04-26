@@ -34,8 +34,8 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -45,24 +45,26 @@ type baseClient interface {
 
 type ddclientMetrics struct {
 	resourceclient.PodMetricsesGetter
-	Context       context.Context
-	Client        baseClient
-	QueryInterval time.Duration
-	ClusterName   string
+	Context         context.Context
+	Client          baseClient
+	QueryInterval   time.Duration
+	ClusterName     string
+	ExtraTagsClause string // Something to shove into the query, where it'll add more AND clauses.
 }
 
 type ddclientPodMetrics struct {
 	v1alpha1.PodMetricsInterface
-	Context       context.Context
-	Client        baseClient
-	QueryInterval time.Duration
-	ClusterName   string
-	Namespace     string
+	Context         context.Context
+	Client          baseClient
+	QueryInterval   time.Duration
+	ClusterName     string
+	Namespace       string // Namespace for the pods
+	ExtraTagsClause string // Something to shove into the query, where it'll add more AND clauses.
 }
 
 func (d ddclientMetrics) PodMetricses(namespace string) resourceclient.PodMetricsInterface {
 	klog.Infof("ddclientMetrics.PodMetricses(namespace:%s)", namespace)
-	return &ddclientPodMetrics{Context: d.Context, Namespace: namespace, Client: d.Client, QueryInterval: d.QueryInterval, ClusterName: d.ClusterName}
+	return &ddclientPodMetrics{Context: d.Context, Namespace: namespace, Client: d.Client, QueryInterval: d.QueryInterval, ClusterName: d.ClusterName, ExtraTagsClause: d.ExtraTagsClause}
 }
 
 func (d ddclientPodMetrics) queryMetrics(queryStr string) (datadog.MetricsQueryResponse, error) {
@@ -82,15 +84,14 @@ func (d ddclientPodMetrics) queryMetrics(queryStr string) (datadog.MetricsQueryR
 // Series values that don't have the tag will be under the bucket keyed with emptyTag.
 func classifyByTag(values []datadog.MetricsQueryMetadata, tag string, emptyTag string) map[string][]datadog.MetricsQueryMetadata {
 	result := make(map[string][]datadog.MetricsQueryMetadata)
-	re := regexp.MustCompile(tag + ":(.*)")
+	tagLen := len(tag)
 	for _, entity := range values {
 		matched := false
 		for _, ts := range entity.GetTagSet() {
-			match := re.FindStringSubmatch(ts)
-			if len(match) > 0 {
-				result[match[1]] = append(result[match[1]], entity)
+			if strings.HasPrefix(ts, tag) && ts[tagLen] == ':' {
+				tagValue := ts[tagLen+1:]
+				result[tagValue] = append(result[tagValue], entity)
 				matched = true
-				break
 			}
 		}
 		if !matched {
@@ -216,23 +217,17 @@ FindTimestamp:
 }
 
 func (d ddclientPodMetrics) Get(_ context.Context, podName string, _ metav1.GetOptions) (*v1beta1.PodMetrics, error) {
-	// Metrics known to work:
-	//   kubernetes.cpu.usage.total
-	//   kubernetes.cpu.requests
-	//   kubernetes.memory.usage
-	//   kubernetes.memory.rss -- From comment in v1alpha1/types.go:93: "THe memory usage is the memory working set"
-	//   kubernetes.memory.requests
 	nsClause := ""
 	if len(d.Namespace) > 0 {
 		nsClause = fmt.Sprintf(" AND kube_namespace:%s ", d.Namespace)
 	}
-	cpuResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.cpu.usage.total{kube_cluster_name:%s%s AND pod_name:%s}by{kube_namespace,container_name}",
-		d.ClusterName, nsClause, podName))
+	cpuResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.cpu.usage.total{kube_cluster_name:%s%s%s AND pod_name:%s}by{kube_namespace,container_name}",
+		d.ClusterName, nsClause, d.ExtraTagsClause, podName))
 	if err != nil {
 		return nil, err
 	}
-	memResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.memory.usage{ kube_cluster_name:%s%s AND pod_name:%s}by{kube_namespace,container_name}",
-		d.ClusterName, nsClause, podName))
+	memResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.memory.usage{ kube_cluster_name:%s%s%s AND pod_name:%s}by{kube_namespace,container_name}",
+		d.ClusterName, nsClause, d.ExtraTagsClause, podName))
 	if err != nil {
 		return nil, err
 	}
@@ -245,13 +240,13 @@ func (d ddclientPodMetrics) List(_ context.Context, _ metav1.ListOptions) (*v1be
 	if len(d.Namespace) > 0 {
 		nsClause = fmt.Sprintf(" AND kube_namespace:%s ", d.Namespace)
 	}
-	cpuResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.cpu.usage.total{kube_cluster_name:%s%s}by{kube_namespace,pod_name,container_name}",
-		d.ClusterName, nsClause))
+	cpuResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.cpu.usage.total{kube_cluster_name:%s%s%s}by{kube_namespace,pod_name,container_name}",
+		d.ClusterName, nsClause, d.ExtraTagsClause))
 	if err != nil {
 		return nil, err
 	}
-	memResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.memory.usage{kube_cluster_name:%s%s}by{kube_namespace,pod_name,container_name}",
-		d.ClusterName, nsClause))
+	memResp, err := d.queryMetrics(fmt.Sprintf("kubernetes.memory.usage{kube_cluster_name:%s%s%s}by{kube_namespace,pod_name,container_name}",
+		d.ClusterName, nsClause, d.ExtraTagsClause))
 	if err != nil {
 		return nil, err
 	}
@@ -267,10 +262,9 @@ func (d ddclientPodMetrics) List(_ context.Context, _ metav1.ListOptions) (*v1be
 	return &v1beta1.PodMetricsList{Items: podItems}, nil
 }
 
-func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, clientApiSecrets string, newApiClient func(*datadog.Configuration) baseClient) resourceclient.PodMetricsesGetter {
+func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, clientApiSecrets string, extraTags []string, newApiClient func(*datadog.Configuration) baseClient) resourceclient.PodMetricsesGetter {
 	authData := map[string]string{}
 	authDataJson, err := ioutil.ReadFile(clientApiSecrets)
-	klog.Infof("For clientApiSecrets file %s, Got %d bytes", clientApiSecrets, len(authDataJson))
 	if err != nil {
 		klog.Fatalf("%s: %v", clientApiSecrets, err)
 	}
@@ -320,7 +314,14 @@ func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, cl
 	klog.V(2).Infof("NewDatadogClient(%v, %s)", queryInterval, cluster)
 	configuration := datadog.NewConfiguration()
 	apiClient := newApiClient(configuration)
-	return ddclientMetrics{Context: ctx, Client: apiClient, QueryInterval: -queryInterval, ClusterName: cluster}
+
+	var clause string
+	if extraTags == nil {
+		clause = ""
+	} else {
+		clause = " AND " + strings.Join(extraTags[:], " AND ")
+	}
+	return ddclientMetrics{Context: ctx, Client: apiClient, QueryInterval: -queryInterval, ClusterName: cluster, ExtraTagsClause: clause}
 }
 
 type clientWrapper struct {
@@ -332,9 +333,9 @@ func (c clientWrapper) QueryMetrics(context context.Context, interval time.Durat
 	return c.ApiClient.MetricsApi.QueryMetrics(context, time.Now().Add(interval).Unix(), time.Now().Unix(), query)
 }
 
-func NewDatadogClient(queryInterval time.Duration, cluster string, clientApiSecrets string) resourceclient.PodMetricsesGetter {
+func NewDatadogClient(queryInterval time.Duration, cluster string, clientApiSecrets string, extraTags []string) resourceclient.PodMetricsesGetter {
 	var wrapFn = func(configuration *datadog.Configuration) baseClient {
 		return &clientWrapper{ApiClient: *datadog.NewAPIClient(configuration)}
 	}
-	return newDatadogClientWithFactory(queryInterval, cluster, clientApiSecrets, wrapFn)
+	return newDatadogClientWithFactory(queryInterval, cluster, clientApiSecrets, extraTags, wrapFn)
 }

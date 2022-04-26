@@ -42,19 +42,19 @@ func TestMain(m *testing.M) {
 }
 
 func TestNewDatadogClient(t *testing.T) {
-	if NewDatadogClient(time.Second, "test", fakeConfigFile) == nil {
+	if NewDatadogClient(time.Second, "test", fakeConfigFile, nil) == nil {
 		t.Errorf("Client should have been created with a valid interval and cluster")
 	}
-	if NewDatadogClient(time.Microsecond, "test", fakeConfigFile) != nil {
+	if NewDatadogClient(time.Microsecond, "test", fakeConfigFile, nil) != nil {
 		t.Errorf("Client shouldn't have been created with a smaller query interval than Datadog reports")
 	}
-	if NewDatadogClient(time.Second, "", fakeConfigFile) != nil {
+	if NewDatadogClient(time.Second, "", fakeConfigFile, nil) != nil {
 		t.Errorf("Client shouldn't have been created without a cluster specified")
 	}
 }
 
 func TestDdclientMetrics_PodMetricses(t *testing.T) {
-	ddclient := NewDatadogClient(time.Second, "test", fakeConfigFile)
+	ddclient := NewDatadogClient(time.Second, "test", fakeConfigFile, nil)
 	podMetrics := ddclient.PodMetricses("foo")
 	if podMetrics == nil {
 		t.Errorf("A valid PodMetricses call failed.")
@@ -63,9 +63,10 @@ func TestDdclientMetrics_PodMetricses(t *testing.T) {
 
 type testClient struct {
 	baseClient
-	retSequence []datadog.MetricsQueryResponse
-	memIndex    map[string]int
-	cpuIndex    map[string]int
+	retSequence        []datadog.MetricsQueryResponse
+	memIndex           map[string]int
+	cpuIndex           map[string]int
+	requiredSubstrings []string
 }
 
 // Add metric data starting at time='start' and using randomized values for CPU (in cores) and mem (in MiB).
@@ -210,6 +211,12 @@ func (tc *testClient) addMetricsElement(start int64, mean float64, scale float64
 }
 
 func (tc testClient) QueryMetrics(context _context.Context, interval time.Duration, query string) (datadog.MetricsQueryResponse, *http.Response, error) {
+	for _, s := range tc.requiredSubstrings {
+		if !strings.Contains(query, s) {
+			return datadog.MetricsQueryResponse{}, nil, errors.New(
+				fmt.Sprintf("Required value %v not in query %v", s, query))
+		}
+	}
 	if strings.HasPrefix(query, "kubernetes.cpu.usage") {
 		for key, idx := range tc.cpuIndex {
 			if strings.Contains(query, key) {
@@ -241,8 +248,6 @@ func TestDdclientPodMetrics_Get(t *testing.T) {
 	assert := assert.New(t)
 	client := testClient{}
 	var err error
-	// The test infrastructure does no query parsing.  Instead, it uses the start time to hard-code results.
-	// So make sure it returns reasonable results for each call here!
 	client.addMetrics("banana", 100, 1.0, 1024, 5, map[string]string{
 		"pod_name":          "banana",
 		"kube_cluster_name": "test",
@@ -255,7 +260,8 @@ func TestDdclientPodMetrics_Get(t *testing.T) {
 		"kube_namespace":    "foo",
 		"container_name":    "fruit",
 	})
-	podMetrics := newDatadogClientWithFactory(time.Second, "test", fakeConfigFile, func(config *datadog.Configuration) baseClient {
+	client.requiredSubstrings = []string{" AND env:prod AND team:performance"}
+	podMetrics := newDatadogClientWithFactory(time.Second, "test", fakeConfigFile, []string{"env:prod", "team:performance"}, func(config *datadog.Configuration) baseClient {
 		return client
 	})
 	metrics := podMetrics.PodMetricses("foo")
@@ -282,5 +288,4 @@ func TestDdclientPodMetrics_Get(t *testing.T) {
 	assert.InDelta(cpu, 1300, 1800)
 	mem = result.Containers[0].Usage.Memory().ScaledValue(resource.Mega)
 	assert.InDelta(mem, 1500, 2500)
-
 }
