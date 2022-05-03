@@ -3,6 +3,9 @@ module k8s.io/autoscaler/vertical-pod-autoscaler
 go 1.16
 
 require (
+	github.com/DataDog/datadog-api-client-go v1.11.0
+	github.com/DataDog/datadog-go v4.8.3+incompatible
+	github.com/Microsoft/go-winio v0.5.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/golang/mock v1.3.1
 	github.com/prometheus/client_golang v1.0.0
@@ -10,7 +13,9 @@ require (
 	github.com/prometheus/procfs v0.0.5 // indirect
 	github.com/stretchr/testify v1.4.0
 	golang.org/x/crypto v0.0.0-20200221231518-2aa609cf4a9d // indirect
+	golang.org/x/net v0.0.0-20191004110552-13f9640d40b9
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
+	gopkg.in/inf.v0 v0.9.1 // indirect
 	k8s.io/api v0.18.3
 	k8s.io/apimachinery v0.18.3
 	k8s.io/client-go v0.18.3

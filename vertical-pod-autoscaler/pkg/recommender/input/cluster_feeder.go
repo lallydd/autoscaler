@@ -234,7 +234,7 @@ func (feeder *clusterStateFeeder) InitFromHistoryProvider(historyProvider histor
 	}
 	for podID, podHistory := range clusterHistory {
 		klog.V(4).Infof("Adding pod %v with labels %v", podID, podHistory.LastLabels)
-		feeder.clusterState.AddOrUpdatePod(podID, podHistory.LastLabels, apiv1.PodUnknown)
+		feeder.clusterState.AddOrUpdatePod(podID, podHistory.LastLabels, apiv1.PodUnknown, nil)
 		for containerName, sampleList := range podHistory.Samples {
 			containerID := model.ContainerID{
 				PodID:         podID,
@@ -410,6 +410,7 @@ func (feeder *clusterStateFeeder) LoadVPAs() {
 
 // Load pod into the cluster state.
 func (feeder *clusterStateFeeder) LoadPods() {
+	metrics_recommender.StartScan()
 	podSpecs, err := feeder.specClient.GetPodSpecs()
 	if err != nil {
 		klog.Errorf("Cannot get SimplePodSpecs. Reason: %+v", err)
@@ -426,15 +427,18 @@ func (feeder *clusterStateFeeder) LoadPods() {
 	}
 	for _, pod := range pods {
 		if feeder.memorySaveMode && !feeder.matchesVPA(pod) {
+			metrics_recommender.RecordUnmatchedPod(pod.PodLabels)
 			continue
 		}
-		feeder.clusterState.AddOrUpdatePod(pod.ID, pod.PodLabels, pod.Phase)
+		podLabels := labels.Set(pod.PodLabels)
+		feeder.clusterState.AddOrUpdatePod(pod.ID, pod.PodLabels, pod.Phase, &podLabels)
 		for _, container := range pod.Containers {
 			if err = feeder.clusterState.AddOrUpdateContainer(container.ID, container.Request); err != nil {
 				klog.Warningf("Failed to add container %+v. Reason: %+v", container.ID, err)
 			}
 		}
 	}
+	metrics_recommender.FinishScan()
 }
 
 func (feeder *clusterStateFeeder) LoadRealTimeMetrics() {

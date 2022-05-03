@@ -64,7 +64,8 @@ type ddclientPodMetrics struct {
 
 func (d ddclientMetrics) PodMetricses(namespace string) resourceclient.PodMetricsInterface {
 	klog.Infof("ddclientMetrics.PodMetricses(namespace:%s)", namespace)
-	return &ddclientPodMetrics{Context: d.Context, Namespace: namespace, Client: d.Client, QueryInterval: d.QueryInterval, ClusterName: d.ClusterName, ExtraTagsClause: d.ExtraTagsClause}
+	return &ddclientPodMetrics{Context: d.Context, Namespace: namespace, Client: d.Client,
+		QueryInterval: d.QueryInterval, ClusterName: d.ClusterName, ExtraTagsClause: d.ExtraTagsClause}
 }
 
 func (d ddclientPodMetrics) queryMetrics(queryStr string) (datadog.MetricsQueryResponse, error) {

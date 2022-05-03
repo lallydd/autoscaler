@@ -19,6 +19,8 @@ package routines
 import (
 	"context"
 	"flag"
+	v12 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/metrics"
 	"time"
 
@@ -125,7 +127,7 @@ func (r *recommender) UpdateVPAs() {
 				klog.Errorf("ClusterState pod count and matching pods disagree for vpa %v/%v", vpa.ID.Namespace, vpa.ID.VpaName)
 			}
 		}
-		cnt.Add(vpa)
+		cnt.Add(vpa.UpdateMode, vpa.IsV1Beta1API, vpa.HasRecommendation(), vpa.HasMatchedPods(), vpa.Conditions.ConditionActive(vpa_types.ConfigUnsupported))
 
 		_, err := vpa_utils.UpdateVpaStatusIfNeeded(
 			r.vpaClient.VerticalPodAutoscalers(vpa.ID.Namespace), vpa.ID.VpaName, vpa.AsStatus(), &observedVpa.Status)
@@ -176,6 +178,33 @@ func (r *recommender) MaintainCheckpoints(ctx context.Context, minCheckpointsPer
 	}
 }
 
+func (r *recommender) UpdateMetrics() {
+	metrics_recommender.StartScan()
+	for _, podState := range r.clusterState.Pods {
+		requests := make(map[string]v12.ResourceList)
+		for containerName, container := range podState.Containers {
+			requests[containerName] = model.ResourcesAsResourceList(container.Request)
+		}
+
+		if podState.Vpas != nil {
+			for _, vpaID := range podState.Vpas {
+				vpa := r.clusterState.Vpas[vpaID]
+				targets := make(map[string]v12.ResourceList)
+				var podLabels labels.Labels
+				for _, rec := range vpa.Recommendation.ContainerRecommendations {
+					aggKey := r.clusterState.MakeAggregateStateKey(podState, rec.ContainerName)
+					targets[rec.ContainerName] = rec.Target
+					podLabels = aggKey.Labels()
+					metrics_recommender.RecordContainerRequestDiff(rec.ContainerName, podState.ID.Namespace, podState.ID.PodName, podLabels, aggKey.Labels(),
+						rec.Target, requests[rec.ContainerName])
+				}
+				metrics_recommender.RecordPodRequestDiff(podState.ID.Namespace, podState.ID.PodName, podLabels, labels.Set(vpa.Annotations), targets, requests)
+			}
+		}
+	}
+	metrics_recommender.FinishScan()
+}
+
 func (r *recommender) RunOnce() {
 	timer := metrics_recommender.NewExecutionTimer()
 	defer timer.ObserveTotal()
@@ -198,6 +227,9 @@ func (r *recommender) RunOnce() {
 
 	r.UpdateVPAs()
 	timer.ObserveStep("UpdateVPAs")
+
+	r.UpdateMetrics()
+	timer.ObserveStep("UpdateMetrics")
 
 	r.MaintainCheckpoints(ctx, *minCheckpointsPerRun)
 	timer.ObserveStep("MaintainCheckpoints")

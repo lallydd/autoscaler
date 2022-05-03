@@ -18,7 +18,8 @@ package main
 
 import (
 	"flag"
-	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input"
+	"github.com/DataDog/datadog-go/statsd"
+	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
 	"os"
 	"strings"
 	"time"
@@ -30,7 +31,6 @@ import (
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/routines"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics"
-	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
 	metrics_recommender "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/recommender"
 	kube_flag "k8s.io/component-base/cli/flag"
 	"k8s.io/klog/v2"
@@ -65,9 +65,11 @@ var (
 	ctrNameLabel        = flag.String("container-name-label", "name", `Label name to look for container names`)
 	vpaObjectNamespace  = flag.String("vpa-object-namespace", apiv1.NamespaceAll, "Namespace to search for VPA objects and pod stats. Empty means all namespaces will be used.")
 
-	kubeClusterName  = flag.String("dd-cluster-name", ``, `kube_cluster_name to qualify metrics queries to.  Required with no default.`)
-	extraTags        = flag.String("dd-extra-tags", ``, `Comma-separated list of additional tags to filter metrics with.`)
-	clientApiSecrets = flag.String("dd-keys-file", "/etc/datadog-client.json", "JSON file with apiKeyAuth, appKeyAuth keys and values.")
+	kubeClusterName    = flag.String("dd-cluster-name", ``, `kube_cluster_name to qualify metrics queries to.  Required with no default.`)
+	extraFilterTags    = flag.String("dd-extra-filter-tags", ``, `Comma-separated list of additional tag:values to filter metrics with.`)
+	extraReportingTags = flag.String("dd-extra-reporting-tags", ``, "Comma-separated list of tag keys to report with metrics")
+	clientApiSecrets   = flag.String("dd-keys-file", "/etc/datadog-client.json", "JSON file with apiKeyAuth, appKeyAuth keys and values.")
+	agentAddress       = flag.String("dd-agent", `localhost:8125`, "host:port for dogstatsd")
 )
 
 // Aggregation configuration flags
@@ -84,31 +86,33 @@ func main() {
 	klog.V(1).Infof("Vertical Pod Autoscaler %s Recommender: %v", common.VerticalPodAutoscalerVersion, DefaultRecommenderName)
 	klog.V(1).Infof("Flags: %v", os.Args)
 	config := common.CreateKubeConfigOrDie(*kubeconfig, float32(*kubeApiQps), int(*kubeApiBurst))
-
 	model.InitializeAggregationsConfig(model.NewAggregationsConfig(*memoryAggregationInterval, *memoryAggregationIntervalCount, *memoryHistogramDecayHalfLife, *cpuHistogramDecayHalfLife))
 
 	healthCheck := metrics.NewHealthCheck(*metricsFetcherInterval*5, true)
 	metrics.Initialize(*address, healthCheck)
-	metrics_recommender.Register()
-	metrics_quality.Register()
 
 	useCheckpoints := *storage != "prometheus"
 	var metricsClient *input_metrics.MetricsClient
 
-	if *metricsSource != "datadog" {
-		k8sClient := input.NewDefaultMetricsClient(config, *vpaObjectNamespace)
-		metricsClient = &k8sClient
-	} else {
-		if len(*kubeClusterName) < 1 {
-			klog.Fatalf("--dd-cluster-name required for datadog metrics source.")
-		}
-		var extraApiTags []string = make([]string, 0)
-		if len(*extraTags) > 0 {
-			extraApiTags = strings.Split(*extraTags, ",")
-		}
-		ddClient := input_metrics.NewMetricsClient(input_metrics.NewDatadogClient(*snapshotHistoryInterval, *kubeClusterName, *clientApiSecrets, extraApiTags), *vpaObjectNamespace)
-		metricsClient = &ddClient
+	if len(*kubeClusterName) < 1 {
+		klog.Fatalf("--dd-cluster-name required for datadog metrics source.")
 	}
+	var extraApiTags []string = make([]string, 0)
+	if len(*extraFilterTags) > 0 {
+		extraApiTags = strings.Split(*extraFilterTags, ",")
+	}
+	var extraMetricsTags = make([]string, 0)
+	if len(*extraReportingTags) > 0 {
+		extraMetricsTags = strings.Split(*extraReportingTags, ",")
+	}
+	client, err := statsd.New(*agentAddress)
+	if err != nil {
+		klog.Fatalf("Failed creating agent: %v", err)
+	}
+	metrics_recommender.Register(client, extraMetricsTags)
+	metrics_quality.Register()
+	ddClient := input_metrics.NewMetricsClient(input_metrics.NewDatadogClient(*snapshotHistoryInterval, *kubeClusterName, *clientApiSecrets, extraApiTags), *vpaObjectNamespace)
+	metricsClient = &ddClient
 
 	recommender := routines.NewRecommender(config, *checkpointsGCInterval, useCheckpoints, *vpaObjectNamespace, *metricsClient)
 
