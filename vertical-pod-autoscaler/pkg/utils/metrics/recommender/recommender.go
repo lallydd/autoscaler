@@ -22,6 +22,7 @@ import (
 	v12 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/klog"
 	"strings"
 	"time"
 
@@ -63,9 +64,7 @@ var (
 	matchedPods   map[string]int
 	unmatchedPods map[string]int
 
-	podKeys     map[string][]string
-	lastPodScan time.Time
-	lastRate    float64
+	podKeys map[string][]string
 
 	// Keep function latency a prometheus metric as its exposed API is used in more than the recommender.
 	functionLatency = metrics.CreateExecutionTimeMetric(metricsNamespace,
@@ -190,9 +189,9 @@ func RecordPodRequestDiff(podNS string, podName string, podLabels labels.Labels,
 	cores := accumulator[v12.ResourceCPU]
 	mibs := accumulator[v12.ResourceMemory]
 	_ = statsdClient.Histogram(metricPodDiffCores,
-		float64(cores.MilliValue())/1000.0, podKeys[key], lastRate)
+		float64(cores.MilliValue())/1000.0, podKeys[key], 0.0)
 	_ = statsdClient.Histogram(metricPodDiffMib,
-		float64(mibs.ScaledValue(resource.Mega)), podKeys[key], lastRate)
+		float64(mibs.ScaledValue(resource.Mega)), podKeys[key], 0.0)
 }
 
 func RecordContainerRequestDiff(containerName string, podNS string, podName string,
@@ -208,31 +207,24 @@ func RecordContainerRequestDiff(containerName string, podNS string, podName stri
 	mibs := delta[v12.ResourceMemory]
 
 	_ = statsdClient.Histogram(metricContainerDiffCores,
-		float64(cores.MilliValue())/1000.0, podKeys[key], lastRate)
+		float64(cores.MilliValue())/1000.0, podKeys[key], 0.0)
 	_ = statsdClient.Histogram(metricContainerDiffMib,
-		float64(mibs.ScaledValue(resource.Mega)), podKeys[key], lastRate)
+		float64(mibs.ScaledValue(resource.Mega)), podKeys[key], 0.0)
 }
 
 // FinishScan marks the end of calls started with StartScan.  It published metrics derived
 // from those calls.
 func FinishScan() {
-	now := time.Now()
-	var rate float64
-	if lastPodScan.IsZero() {
-		// Don't publish on the first interval, we don't have a rate yet.
-		rate = 0
-	} else {
-		interval := now.Sub(lastPodScan).Seconds()
-		rate = 1.0 / interval
-	}
 	for tagKey, count := range matchedPods {
-		_ = statsdClient.Gauge(metricVpaMatchedCount, float64(count), podKeys[tagKey], rate)
+		_ = statsdClient.Gauge(metricVpaMatchedCount, float64(count), podKeys[tagKey], 0.0)
 	}
 	for tagKey, count := range unmatchedPods {
-		_ = statsdClient.Gauge(metricVpaUnmatchedCount, float64(count), podKeys[tagKey], rate)
+		_ = statsdClient.Gauge(metricVpaUnmatchedCount, float64(count), podKeys[tagKey], 0.0)
 	}
-	lastRate = rate
-	lastPodScan = now
+	err := statsdClient.Flush()
+	if err != nil {
+		klog.Errorf("Failed flushing to client: %v", err)
+	}
 }
 
 // NewObjectCounter creates a new helper to split VPA objects into buckets

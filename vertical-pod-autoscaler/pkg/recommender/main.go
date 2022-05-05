@@ -108,6 +108,8 @@ func main() {
 	client, err := statsd.New(*agentAddress)
 	if err != nil {
 		klog.Fatalf("Failed creating agent: %v", err)
+	} else {
+		klog.V(2).Infof("Connected to agent at %v", *agentAddress)
 	}
 	metrics_recommender.Register(client, extraMetricsTags)
 	metrics_quality.Register()

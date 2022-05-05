@@ -191,14 +191,16 @@ func (r *recommender) UpdateMetrics() {
 				vpa := r.clusterState.Vpas[vpaID]
 				targets := make(map[string]v12.ResourceList)
 				var podLabels labels.Labels
-				for _, rec := range vpa.Recommendation.ContainerRecommendations {
-					aggKey := r.clusterState.MakeAggregateStateKey(podState, rec.ContainerName)
-					targets[rec.ContainerName] = rec.Target
-					podLabels = aggKey.Labels()
-					metrics_recommender.RecordContainerRequestDiff(rec.ContainerName, podState.ID.Namespace, podState.ID.PodName, podLabels, aggKey.Labels(),
-						rec.Target, requests[rec.ContainerName])
+				if vpa != nil && vpa.Recommendation != nil {
+					for _, rec := range vpa.Recommendation.ContainerRecommendations {
+						aggKey := r.clusterState.MakeAggregateStateKey(podState, rec.ContainerName)
+						targets[rec.ContainerName] = rec.Target
+						podLabels = aggKey.Labels()
+						metrics_recommender.RecordContainerRequestDiff(rec.ContainerName, podState.ID.Namespace, podState.ID.PodName, podLabels, aggKey.Labels(),
+							rec.Target, requests[rec.ContainerName])
+					}
+					metrics_recommender.RecordPodRequestDiff(podState.ID.Namespace, podState.ID.PodName, podLabels, labels.Set(vpa.Annotations), targets, requests)
 				}
-				metrics_recommender.RecordPodRequestDiff(podState.ID.Namespace, podState.ID.PodName, podLabels, labels.Set(vpa.Annotations), targets, requests)
 			}
 		}
 	}
