@@ -97,11 +97,11 @@ func main() {
 	if len(*kubeClusterName) < 1 {
 		klog.Fatalf("--dd-cluster-name required for datadog metrics source.")
 	}
-	var extraApiTags []string = make([]string, 0)
+	var extraApiTags []string = nil
 	if len(*extraFilterTags) > 0 {
 		extraApiTags = strings.Split(*extraFilterTags, ",")
 	}
-	var extraMetricsTags = make([]string, 0)
+	var extraMetricsTags []string = nil
 	if len(*extraReportingTags) > 0 {
 		extraMetricsTags = strings.Split(*extraReportingTags, ",")
 	}

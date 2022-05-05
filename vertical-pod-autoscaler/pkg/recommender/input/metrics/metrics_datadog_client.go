@@ -34,6 +34,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -316,11 +317,20 @@ func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, cl
 	configuration := datadog.NewConfiguration()
 	apiClient := newApiClient(configuration)
 
-	var clause string
-	if extraTags == nil {
-		clause = ""
-	} else {
-		clause = " AND " + strings.Join(extraTags[:], " AND ")
+	clause := ""
+	if extraTags != nil && len(extraTags) > 1 {
+		validTag, _ := regexp.Compile("[a-zA-Z0-9-]+:[a-zA-Z0-9-]")
+		filtered := make([]string, 0, len(extraTags))
+		for _, s := range extraTags {
+			s = strings.TrimSpace(s)
+			if len(s) > 0 && validTag.MatchString(s) {
+				filtered = append(filtered, s)
+			}
+		}
+		if len(filtered) > 0 {
+			clause = " AND " + strings.Join(filtered, " AND ")
+		}
+
 	}
 	return ddclientMetrics{Context: ctx, Client: apiClient, QueryInterval: -queryInterval, ClusterName: cluster, ExtraTagsClause: clause}
 }
