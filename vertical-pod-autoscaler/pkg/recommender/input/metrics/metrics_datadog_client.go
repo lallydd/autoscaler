@@ -110,16 +110,21 @@ func aggregateResourceData(values map[string][]datadog.MetricsQueryMetadata, res
 	dest *ContainerResourceData) {
 	for containerName, ress := range values {
 		for _, res := range ress {
-			for _, row := range *res.Pointlist {
-				timestamp := *row[0]
-				value := transform(res, *row[1])
-				if (*dest)[timestamp] == nil {
-					(*dest)[timestamp] = make(map[string]map[string]float64)
+			for rowIdx, row := range *res.Pointlist {
+				if len(row) > 1 && row[0] != nil && row[1] != nil {
+					timestamp := *row[0]
+					value := transform(res, *row[1])
+					if (*dest)[timestamp] == nil {
+						(*dest)[timestamp] = make(map[string]map[string]float64)
+					}
+					if (*dest)[timestamp][containerName] == nil {
+						(*dest)[timestamp][containerName] = make(map[string]float64)
+					}
+					(*dest)[timestamp][containerName][resourceName] = value
+				} else {
+					klog.V(2).Infof("Got short row for container %v: row[%d]=%v",
+						containerName, rowIdx, row)
 				}
-				if (*dest)[timestamp][containerName] == nil {
-					(*dest)[timestamp][containerName] = make(map[string]float64)
-				}
-				(*dest)[timestamp][containerName][resourceName] = value
 			}
 		}
 	}
@@ -128,6 +133,7 @@ func aggregateResourceData(values map[string][]datadog.MetricsQueryMetadata, res
 // Returns the number of whole hypercores (e.g., a hyperthread in Intel parlance) indicated by this
 // raw measurement.
 func scaleCpuToCores(met datadog.MetricsQueryMetadata, value float64) float64 {
+
 	// Nanocores have a scale factor of 1e-9.
 	scale := (*met.Unit)[0].ScaleFactor
 	return value * *scale
