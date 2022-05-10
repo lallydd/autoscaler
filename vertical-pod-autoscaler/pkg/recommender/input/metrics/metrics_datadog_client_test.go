@@ -289,3 +289,50 @@ func TestDdclientPodMetrics_Get(t *testing.T) {
 	mem = result.Containers[0].Usage.Memory().ScaledValue(resource.Mega)
 	assert.InDelta(mem, 1500, 2500)
 }
+
+type storedResults struct {
+	baseClient
+	Cpu, Mem datadog.MetricsQueryResponse
+}
+
+func (res *storedResults) QueryMetrics(context context.Context, interval time.Duration, query string) (datadog.MetricsQueryResponse, *http.Response, error) {
+	// Nice and dumb response.  Split up the query by periods, use the second word to look up what to return.
+	keywords := strings.Split(query, ".")
+	if keywords[1] == "cpu" {
+		return res.Cpu, nil, nil
+	} else if keywords[1] == "memory" {
+		return res.Mem, nil, nil
+	} else {
+		return datadog.MetricsQueryResponse{}, nil, errors.New(fmt.Sprintf("No match for %v", keywords[1]))
+	}
+}
+
+// Integration test.  Use recorded data from an API call and feed through.
+// Use as a benchmark.
+func TestDdclientPodMetrics_List(t *testing.T) {
+	// 1. Load up some data JSON and pre-pump it through a test client.
+	const filename = "testdata/combined-dd.json"
+	dataset, err := os.Open(filename)
+	if err != nil {
+		t.Fatalf("Failed opening %s: %v", filename, err)
+	}
+	storedResponses := storedResults{}
+	decoder := json.NewDecoder(dataset)
+	err = decoder.Decode(&storedResponses)
+	if err != nil {
+		t.Fatalf("Failed parsing %s: %v", filename, err)
+	}
+
+	client := newDatadogClientWithFactory(10*time.Second, "general1", fakeConfigFile, []string{"env:prod", "team:performance"}, func(configuration *datadog.Configuration) baseClient {
+		return &storedResponses
+	})
+
+	metricses := client.PodMetricses("")
+	startTime := time.Now()
+	res, err := metricses.List(context.TODO(), v1.ListOptions{})
+	if err != nil {
+		t.Fatalf("Failed listing stored metrics: %v", err)
+	}
+	duration := time.Since(startTime)
+	fmt.Printf(" ** Took %v to parse stored, nontrivial dataset of %v items **\n", duration, len(res.Items))
+}

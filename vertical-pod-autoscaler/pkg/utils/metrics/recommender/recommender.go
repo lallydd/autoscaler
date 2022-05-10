@@ -131,6 +131,12 @@ func saveLabels(set labels.Labels) string {
 
 func concatLabels(first labels.Labels, second labels.Labels) labels.Labels {
 	result := make(labels.Set)
+	if first == nil {
+		first = make(labels.Set)
+	}
+	if second == nil {
+		second = make(labels.Set)
+	}
 	for k := range labelsToSave {
 		if first.Has(k) {
 			result[k] = first.Get(k)
@@ -206,20 +212,32 @@ func RecordContainerRequestDiff(containerName string, podNS string, podName stri
 	cores := delta[v12.ResourceCPU]
 	mibs := delta[v12.ResourceMemory]
 
-	_ = statsdClient.Histogram(metricContainerDiffCores,
+	err := statsdClient.Histogram(metricContainerDiffCores,
 		float64(cores.MilliValue())/1000.0, podKeys[key], 0.0)
-	_ = statsdClient.Histogram(metricContainerDiffMib,
+	if err != nil {
+		klog.Errorf("Failed to write metric %s: %v", metricContainerDiffCores, err)
+	}
+	err = statsdClient.Histogram(metricContainerDiffMib,
 		float64(mibs.ScaledValue(resource.Mega)), podKeys[key], 0.0)
+	if err != nil {
+		klog.Errorf("Failed to write metric %s: %v", metricContainerDiffMib, err)
+	}
 }
 
 // FinishScan marks the end of calls started with StartScan.  It published metrics derived
 // from those calls.
 func FinishScan() {
 	for tagKey, count := range matchedPods {
-		_ = statsdClient.Gauge(metricVpaMatchedCount, float64(count), podKeys[tagKey], 0.0)
+		err := statsdClient.Gauge(metricVpaMatchedCount, float64(count), podKeys[tagKey], 0.0)
+		if err != nil {
+			klog.Errorf("Failed to write metric %s: %v", metricVpaMatchedCount, err)
+		}
 	}
 	for tagKey, count := range unmatchedPods {
-		_ = statsdClient.Gauge(metricVpaUnmatchedCount, float64(count), podKeys[tagKey], 0.0)
+		err := statsdClient.Gauge(metricVpaUnmatchedCount, float64(count), podKeys[tagKey], 0.0)
+		if err != nil {
+			klog.Errorf("Failed to write metric %s: %v", metricVpaUnmatchedCount, err)
+		}
 	}
 	err := statsdClient.Flush()
 	if err != nil {
@@ -290,7 +308,11 @@ func labelsFor(oc objectCounterKey) []string {
 
 // Observe passes all the computed bucket values to metrics
 func (oc *ObjectCounter) Observe() {
+	klog.Infof("Observe(): Writing out %d key/value pairs for %s", len(oc.cnt), metricObjectCount)
 	for k, v := range oc.cnt {
-		_ = statsdClient.Gauge(metricObjectCount, float64(v), labelsFor(k), 0.0)
+		err := statsdClient.Gauge(metricObjectCount, float64(v), labelsFor(k), 0.0)
+		if err != nil {
+			klog.Errorf("Failed to write metric %s: %v", metricObjectCount, err)
+		}
 	}
 }

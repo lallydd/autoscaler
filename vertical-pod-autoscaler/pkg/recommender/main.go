@@ -70,6 +70,9 @@ var (
 	extraReportingTags = flag.String("dd-extra-reporting-tags", ``, "Comma-separated list of tag keys to report with metrics")
 	clientApiSecrets   = flag.String("dd-keys-file", "/etc/datadog-client.json", "JSON file with apiKeyAuth, appKeyAuth keys and values.")
 	agentAddress       = flag.String("dd-agent", `localhost:8125`, "host:port for dogstatsd")
+	cpuQosMod          = flag.Bool("dd-cpu-guaranteed-qos", true, `Set requests=limits=ceil(reqPercentile of cpu) to use Guaranteed QoS CPU`)
+	reqPercentile      = flag.Float64("dd-request-percentile", 90.0, "Percentile of usage to set requests to.")
+	limitMargin        = flag.Float64("dd-limit-margin", 25.0, "Percent above requests to set limits to.  --dd-cpu-guaranteed-qos has precedence.")
 )
 
 // Aggregation configuration flags
@@ -116,7 +119,8 @@ func main() {
 	ddClient := input_metrics.NewMetricsClient(input_metrics.NewDatadogClient(*snapshotHistoryInterval, *kubeClusterName, *clientApiSecrets, extraApiTags), *vpaObjectNamespace)
 	metricsClient = &ddClient
 
-	recommender := routines.NewRecommender(config, *checkpointsGCInterval, useCheckpoints, *vpaObjectNamespace, *metricsClient)
+	recommender := routines.NewRecommender(config, *checkpointsGCInterval, useCheckpoints, *vpaObjectNamespace,
+		*cpuQosMod, *reqPercentile, *limitMargin, *metricsClient)
 
 	promQueryTimeout, err := time.ParseDuration(*queryTimeout)
 	if err != nil {

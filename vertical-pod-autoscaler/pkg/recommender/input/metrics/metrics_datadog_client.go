@@ -206,22 +206,26 @@ FindTimestamp:
 			break FindTimestamp
 		}
 	}
+	var containers []v1beta1.ContainerMetrics
 	if selection > 0.0 {
-		containers := make([]v1beta1.ContainerMetrics, 0, len(data[selection]))
+		containers = make([]v1beta1.ContainerMetrics, 0, len(data[selection]))
 		for name, containerData := range data[selection] {
 			containers = append(containers,
 				v1beta1.ContainerMetrics{Name: name, Usage: makeResourceList(containerData["cpu"], containerData["memory"])})
 		}
-		return &v1beta1.PodMetrics{
-			// Built against golang 1.16.6, no time.UnixMilli yet.
-			ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: podNamespace, UID: types.UID(podNamespace + "." + podName)},
-			Timestamp:  metav1.Time{Time: time.Unix(int64(selection/1000.0), int64(math.Mod(selection, 1000)*1000000))},
-			Window:     metav1.Duration{Duration: time.Second},
-			Containers: containers}
-
+	} else {
+		containers = make([]v1beta1.ContainerMetrics, 0)
+		// Reset the selection value to keep the timestamps sane below.
+		selection = 0.0
 	}
 
-	return nil
+	return &v1beta1.PodMetrics{
+		// Built against golang 1.16.6, no time.UnixMilli yet.
+		ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: podNamespace, UID: types.UID(podNamespace + "." + podName)},
+		Timestamp:  metav1.Time{Time: time.Unix(int64(selection/1000.0), int64(math.Mod(selection, 1000)*1000000))},
+		Window:     metav1.Duration{Duration: time.Second},
+		Containers: containers}
+
 }
 
 func (d ddclientPodMetrics) Get(_ context.Context, podName string, _ metav1.GetOptions) (*v1beta1.PodMetrics, error) {
@@ -264,7 +268,10 @@ func (d ddclientPodMetrics) List(_ context.Context, _ metav1.ListOptions) (*v1be
 
 	podItems := make([]v1beta1.PodMetrics, 0, len(podCpus))
 	for podname, cpuVals := range podCpus {
-		podItems = append(podItems, *d.aggregatePodMetrics(podname, cpuVals, podMems[podname]))
+		podMets := d.aggregatePodMetrics(podname, cpuVals, podMems[podname])
+		if podMets != nil {
+			podItems = append(podItems, *podMets)
+		}
 	}
 
 	return &v1beta1.PodMetricsList{Items: podItems}, nil
