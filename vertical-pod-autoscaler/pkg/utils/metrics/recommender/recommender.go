@@ -104,12 +104,20 @@ func NewExecutionTimer() *metrics.ExecutionTimer {
 
 // ObserveRecommendationLatency observes the time it took for the first recommendation to appear
 func ObserveRecommendationLatency(created time.Time) {
-	_ = statsdClient.Histogram(metricRecommendationLatency, time.Since(created).Seconds(), nil, 0)
+	err := statsdClient.Histogram(metricRecommendationLatency, time.Since(created).Seconds(), nil, 0)
+	if err != nil {
+		klog.Errorf("Failed to write metric %s: %v", metricRecommendationLatency, err)
+	}
+
 }
 
 // RecordAggregateContainerStatesCount records the number of containers being tracked by the recommender
 func RecordAggregateContainerStatesCount(statesCount int) {
-	_ = statsdClient.Gauge(metricAggContainerStates, float64(statesCount), nil, 0.0)
+	err := statsdClient.Gauge(metricAggContainerStates, float64(statesCount), nil, 0.0)
+	if err != nil {
+		klog.Errorf("Failed to write metric %s: %v", metricAggContainerStates, err)
+	}
+
 }
 
 func saveLabels(set labels.Labels) string {
@@ -194,10 +202,16 @@ func RecordPodRequestDiff(podNS string, podName string, podLabels labels.Labels,
 	key := saveLabels(concatLabels(concatLabels(labels.Set(extraMetadata), podLabels), vpaLabels))
 	cores := accumulator[v12.ResourceCPU]
 	mibs := accumulator[v12.ResourceMemory]
-	_ = statsdClient.Histogram(metricPodDiffCores,
+	err := statsdClient.Histogram(metricPodDiffCores,
 		float64(cores.MilliValue())/1000.0, podKeys[key], 0.0)
-	_ = statsdClient.Histogram(metricPodDiffMib,
+	if err != nil {
+		klog.Errorf("Failed to write metric %s: %v", metricPodDiffCores, err)
+	}
+	err = statsdClient.Histogram(metricPodDiffMib,
 		float64(mibs.ScaledValue(resource.Mega)), podKeys[key], 0.0)
+	if err != nil {
+		klog.Errorf("Failed to write metric %s: %v", metricPodDiffMib, err)
+	}
 }
 
 func RecordContainerRequestDiff(containerName string, podNS string, podName string,

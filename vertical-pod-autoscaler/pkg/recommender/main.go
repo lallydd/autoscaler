@@ -72,7 +72,6 @@ var (
 	agentAddress       = flag.String("dd-agent", `localhost:8125`, "host:port for dogstatsd")
 	cpuQosMod          = flag.Bool("dd-cpu-guaranteed-qos", true, `Set requests=limits=ceil(reqPercentile of cpu) to use Guaranteed QoS CPU`)
 	reqPercentile      = flag.Float64("dd-request-percentile", 90.0, "Percentile of usage to set requests to.")
-	limitMargin        = flag.Float64("dd-limit-margin", 25.0, "Percent above requests to set limits to.  --dd-cpu-guaranteed-qos has precedence.")
 )
 
 // Aggregation configuration flags
@@ -120,7 +119,7 @@ func main() {
 	metricsClient = &ddClient
 
 	recommender := routines.NewRecommender(config, *checkpointsGCInterval, useCheckpoints, *vpaObjectNamespace,
-		*cpuQosMod, *reqPercentile, *limitMargin, *metricsClient)
+		*cpuQosMod, *reqPercentile, *metricsClient)
 
 	promQueryTimeout, err := time.ParseDuration(*queryTimeout)
 	if err != nil {

@@ -61,6 +61,10 @@ type confidenceMultiplier struct {
 	baseEstimator ResourceEstimator
 }
 
+type ceilCpuEstimator struct {
+	baseEstimator ResourceEstimator
+}
+
 // NewConstEstimator returns a new constEstimator with given resources.
 func NewConstEstimator(resources model.Resources) ResourceEstimator {
 	return &constEstimator{resources}
@@ -86,6 +90,10 @@ func WithMinResources(minResources model.Resources, baseEstimator ResourceEstima
 // WithConfidenceMultiplier returns a given ResourceEstimator with confidenceMultiplier applied.
 func WithConfidenceMultiplier(multiplier, exponent float64, baseEstimator ResourceEstimator) ResourceEstimator {
 	return &confidenceMultiplier{multiplier, exponent, baseEstimator}
+}
+
+func WithCeilCpuEstimator(baseEstimator ResourceEstimator) ResourceEstimator {
+	return &ceilCpuEstimator{baseEstimator}
 }
 
 // Returns a constant amount of resources.
@@ -153,6 +161,20 @@ func (e *minResourcesEstimator) GetResourceEstimation(s *model.AggregateContaine
 			resourceAmount = e.minResources[resource]
 		}
 		newResources[resource] = resourceAmount
+	}
+	return newResources
+}
+
+func (e *ceilCpuEstimator) GetResourceEstimation(s *model.AggregateContainerState) model.Resources {
+	originalResources := e.baseEstimator.GetResourceEstimation(s)
+
+	newResources := make(model.Resources)
+	for resource, resourceAmount := range originalResources {
+		if resource == model.ResourceCPU {
+			newResources[resource] = model.ResourceAmount(1000 * math.Ceil(float64(resourceAmount)/1000.0))
+		} else {
+			newResources[resource] = resourceAmount
+		}
 	}
 	return newResources
 }

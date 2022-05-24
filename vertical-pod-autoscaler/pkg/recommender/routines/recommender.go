@@ -60,8 +60,6 @@ type RecommenderOptions struct {
 	cpuQos bool
 	// Which percentile to use.  Default is 90.
 	percentile float64
-	// Which % more to add to requests to get limits.  Always applied to memory, only to cpu if !cpuQos
-	limitPercentage float64
 }
 
 // Recommender recommend resources for certain containers, based on utilization periodically got from metrics api.
@@ -290,19 +288,19 @@ func (c RecommenderFactory) Make() Recommender {
 // Dependencies are created automatically.
 // Deprecated; use RecommenderFactory instead.
 func NewRecommender(config *rest.Config, checkpointsGCInterval time.Duration, useCheckpoints bool, namespace string,
-	cpuQos bool, percentile float64, margin float64, metricsClient metrics.MetricsClient) Recommender {
+	cpuQos bool, percentile float64, metricsClient metrics.MetricsClient) Recommender {
 	clusterState := model.NewClusterState(AggregateContainerStateGCInterval)
 	kubeClient := kube_client.NewForConfigOrDie(config)
 	factory := informers.NewSharedInformerFactoryWithOptions(kubeClient, defaultResyncPeriod, informers.WithNamespace(namespace))
 	controllerFetcher := controllerfetcher.NewControllerFetcher(config, kubeClient, factory, scaleCacheEntryFreshnessTime, scaleCacheEntryLifetime, scaleCacheEntryJitterFactor)
-	options := RecommenderOptions{cpuQos: cpuQos, percentile: percentile / 100.0, limitPercentage: margin / 100.0}
+	options := RecommenderOptions{cpuQos: cpuQos, percentile: percentile / 100.0}
 	return RecommenderFactory{
 		ClusterState:           clusterState,
 		ClusterStateFeeder:     input.NewClusterStateFeeder(config, clusterState, *memorySaver, namespace, metricsClient),
 		ControllerFetcher:      controllerFetcher,
 		CheckpointWriter:       checkpoint.NewCheckpointWriter(clusterState, vpa_clientset.NewForConfigOrDie(config).AutoscalingV1()),
 		VpaClient:              vpa_clientset.NewForConfigOrDie(config).AutoscalingV1(),
-		PodResourceRecommender: logic.CreatePodResourceRecommender(),
+		PodResourceRecommender: logic.CreatePodResourceRecommender(cpuQos, percentile),
 		CheckpointsGCInterval:  checkpointsGCInterval,
 		UseCheckpoints:         useCheckpoints,
 		Options:                options,

@@ -18,6 +18,7 @@ package logic
 
 import (
 	"flag"
+	"math"
 
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
 )
@@ -98,10 +99,10 @@ func FilterControlledResources(estimation model.Resources, controlledResources [
 }
 
 // CreatePodResourceRecommender returns the primary recommender.
-func CreatePodResourceRecommender() PodResourceRecommender {
-	targetCPUPercentile := 0.9
+func CreatePodResourceRecommender(cpuQos bool, percentile float64) PodResourceRecommender {
+	targetCPUPercentile := percentile
 	lowerBoundCPUPercentile := 0.5
-	upperBoundCPUPercentile := 0.95
+	upperBoundCPUPercentile := math.Max(0.95, percentile)
 
 	targetMemoryPeaksPercentile := 0.9
 	lowerBoundMemoryPeaksPercentile := 0.5
@@ -142,6 +143,11 @@ func CreatePodResourceRecommender() PodResourceRecommender {
 	// 60m history  : *0.95
 	lowerBoundEstimator = WithConfidenceMultiplier(0.001, -2.0, lowerBoundEstimator)
 
+	if cpuQos {
+		targetEstimator = WithCeilCpuEstimator(targetEstimator)
+		lowerBoundEstimator = WithCeilCpuEstimator(lowerBoundEstimator)
+		upperBoundEstimator = WithCeilCpuEstimator(upperBoundEstimator)
+	}
 	return &podResourceRecommender{
 		targetEstimator,
 		lowerBoundEstimator,
