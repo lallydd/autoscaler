@@ -20,6 +20,7 @@ import (
 	"flag"
 	"github.com/DataDog/datadog-go/statsd"
 	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -69,8 +70,8 @@ var (
 	extraFilterTags    = flag.String("dd-extra-filter-tags", ``, `Comma-separated list of additional tag:values to filter metrics with.`)
 	extraReportingTags = flag.String("dd-extra-reporting-tags", ``, "Comma-separated list of tag keys to report with metrics")
 	clientApiSecrets   = flag.String("dd-keys-file", "/etc/datadog-client.json", "JSON file with apiKeyAuth, appKeyAuth keys and values.")
-	agentAddress       = flag.String("dd-agent", `localhost:8125`, "host:port for dogstatsd")
-	cpuQosMod          = flag.Bool("dd-cpu-guaranteed-qos", true, `Set requests=limits=ceil(reqPercentile of cpu) to use Guaranteed QoS CPU`)
+	agentAddress       = flag.String("dd-agent", ``, "host:port for dogstatsd")
+	cpuQosMod          = flag.Bool("dd-cpu-guaranteed-qos", false, `Set requests=limits=ceil(reqPercentile of cpu) to use Guaranteed QoS CPU`)
 	reqPercentile      = flag.Float64("dd-request-percentile", 90.0, "Percentile of usage to set requests to.")
 )
 
@@ -86,7 +87,7 @@ func main() {
 	klog.InitFlags(nil)
 	kube_flag.InitFlags()
 	klog.V(1).Infof("Vertical Pod Autoscaler %s Recommender: %v", common.VerticalPodAutoscalerVersion, DefaultRecommenderName)
-	klog.V(1).Infof("Flags: %v", os.Args)
+	klog.V(1).Infof("Flags: %v, Environment: %v", os.Args, os.Environ())
 	config := common.CreateKubeConfigOrDie(*kubeconfig, float32(*kubeApiQps), int(*kubeApiBurst))
 	model.InitializeAggregationsConfig(model.NewAggregationsConfig(*memoryAggregationInterval, *memoryAggregationIntervalCount, *memoryHistogramDecayHalfLife, *cpuHistogramDecayHalfLife))
 
@@ -107,11 +108,26 @@ func main() {
 	if len(*extraReportingTags) > 0 {
 		extraMetricsTags = strings.Split(*extraReportingTags, ",")
 	}
-	client, err := statsd.New(*agentAddress)
+
+	var agentAddr string
+	if len(*agentAddress) == 0 {
+		statsdHost, statsdPort := "localhost", "8125"
+		if v := os.Getenv("DD_AGENT_HOST"); v != "" {
+			statsdHost = v
+		}
+		if v := os.Getenv("DD_DOGSTATSD_PORT"); v != "" {
+			statsdPort = v
+		}
+		agentAddr = net.JoinHostPort(statsdHost, statsdPort)
+	} else {
+		agentAddr = *agentAddress
+	}
+
+	client, err := statsd.New(agentAddr)
 	if err != nil {
 		klog.Fatalf("Failed creating agent: %v", err)
 	} else {
-		klog.V(2).Infof("Connected to agent at %v", *agentAddress)
+		klog.V(2).Infof("Connected to agent at %v", agentAddr)
 	}
 	metrics_recommender.Register(client, extraMetricsTags)
 	metrics_quality.Register()
