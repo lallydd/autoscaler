@@ -111,14 +111,16 @@ func main() {
 
 	var agentAddr string
 	if len(*agentAddress) == 0 {
-		statsdHost, statsdPort := "localhost", "8125"
-		if v := os.Getenv("DD_AGENT_HOST"); v != "" {
-			statsdHost = v
+		if agentAddr = os.Getenv("STATSD_URL"); agentAddr == "" {
+			statsdHost, statsdPort := "localhost", "8125"
+			if v := os.Getenv("DD_AGENT_HOST"); v != "" {
+				statsdHost = v
+			}
+			if v := os.Getenv("DD_DOGSTATSD_PORT"); v != "" {
+				statsdPort = v
+			}
+			agentAddr = net.JoinHostPort(statsdHost, statsdPort)
 		}
-		if v := os.Getenv("DD_DOGSTATSD_PORT"); v != "" {
-			statsdPort = v
-		}
-		agentAddr = net.JoinHostPort(statsdHost, statsdPort)
 	} else {
 		agentAddr = *agentAddress
 	}
