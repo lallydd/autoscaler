@@ -377,7 +377,7 @@ func (cluster *ClusterState) garbageCollectAggregateCollectionStates(now time.Ti
 		isKeyContributive := contributiveKeys[key]
 		if !isKeyContributive && aggregateContainerState.isEmpty() {
 			keysToDelete = append(keysToDelete, key)
-			klog.V(1).Infof("Removing empty and not contributive AggregateCollectionState for %+v", key)
+			// klog.V(1).Infof("Removing empty and not contributive AggregateCollectionState for %+v", key)
 			continue
 		}
 		if aggregateContainerState.isExpired(now) {

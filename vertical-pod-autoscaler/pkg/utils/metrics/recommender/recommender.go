@@ -329,4 +329,8 @@ func (oc *ObjectCounter) Observe() {
 			klog.Errorf("Failed to write metric %s: %v", metricObjectCount, err)
 		}
 	}
+	err := statsdClient.Flush()
+	if err != nil {
+		klog.Errorf("Failed to flush metrics: %v", err)
+	}
 }

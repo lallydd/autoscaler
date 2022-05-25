@@ -21,6 +21,7 @@ import (
 	"math"
 
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
+	"k8s.io/klog/v2"
 )
 
 var (
@@ -57,6 +58,7 @@ type podResourceRecommender struct {
 func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggregateStateMap model.ContainerNameToAggregateStateMap) RecommendedPodResources {
 	var recommendation = make(RecommendedPodResources)
 	if len(containerNameToAggregateStateMap) == 0 {
+		klog.V(4).Infof("Recommendation: No keys in state map.")
 		return recommendation
 	}
 
@@ -75,6 +77,15 @@ func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggre
 	for containerName, aggregatedContainerState := range containerNameToAggregateStateMap {
 		recommendation[containerName] = recommender.estimateContainerResources(aggregatedContainerState)
 	}
+
+	numContainers, numSamples := 0, 0
+	for name, mp := range containerNameToAggregateStateMap {
+		numContainers += 1
+		numSamples += mp.TotalSamplesCount
+		klog.V(4).Infof("Recommendation[%s]: We have %d samples", name, mp.TotalSamplesCount)
+	}
+	klog.V(3).Infof("Recommendation: For %d containers we have %d samples", numContainers, numSamples)
+
 	return recommendation
 }
 

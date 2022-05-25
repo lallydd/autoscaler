@@ -286,6 +286,7 @@ func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, cl
 
 	err = json.Unmarshal(authDataJson, &authData)
 	if err != nil {
+		klog.Errorf("Failed to parse %v", string(authDataJson))
 		klog.Fatalf("%s: %v", clientApiSecrets, err)
 	}
 

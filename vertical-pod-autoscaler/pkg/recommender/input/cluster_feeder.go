@@ -456,7 +456,7 @@ func (feeder *clusterStateFeeder) LoadRealTimeMetrics() {
 				if _, isKeyError := err.(model.KeyError); isKeyError && feeder.memorySaveMode {
 					continue
 				}
-				klog.Warningf("Error adding metric sample for container %v: %v", sample.Container, err)
+				//klog.Warningf("Error adding metric sample for container %v: %v", sample.Container, err)
 				droppedSampleCount++
 			} else {
 				sampleCount++
