@@ -203,12 +203,12 @@ func RecordPodRequestDiff(podNS string, podName string, podLabels labels.Labels,
 	cores := accumulator[v12.ResourceCPU]
 	mibs := accumulator[v12.ResourceMemory]
 	err := statsdClient.Histogram(metricPodDiffCores,
-		float64(cores.MilliValue())/1000.0, podKeys[key], 0.0)
+		float64(cores.MilliValue())/1000.0, podKeys[key], 1.0)
 	if err != nil {
 		klog.Errorf("Failed to write metric %s: %v", metricPodDiffCores, err)
 	}
 	err = statsdClient.Histogram(metricPodDiffMib,
-		float64(mibs.ScaledValue(resource.Mega)), podKeys[key], 0.0)
+		float64(mibs.ScaledValue(resource.Mega)), podKeys[key], 1.0)
 	if err != nil {
 		klog.Errorf("Failed to write metric %s: %v", metricPodDiffMib, err)
 	}
@@ -227,12 +227,12 @@ func RecordContainerRequestDiff(containerName string, podNS string, podName stri
 	mibs := delta[v12.ResourceMemory]
 
 	err := statsdClient.Histogram(metricContainerDiffCores,
-		float64(cores.MilliValue())/1000.0, podKeys[key], 0.0)
+		float64(cores.MilliValue())/1000.0, podKeys[key], 1.0)
 	if err != nil {
 		klog.Errorf("Failed to write metric %s: %v", metricContainerDiffCores, err)
 	}
 	err = statsdClient.Histogram(metricContainerDiffMib,
-		float64(mibs.ScaledValue(resource.Mega)), podKeys[key], 0.0)
+		float64(mibs.ScaledValue(resource.Mega)), podKeys[key], 1.0)
 	if err != nil {
 		klog.Errorf("Failed to write metric %s: %v", metricContainerDiffMib, err)
 	}
