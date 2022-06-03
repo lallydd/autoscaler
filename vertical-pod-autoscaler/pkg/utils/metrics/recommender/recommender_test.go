@@ -2,7 +2,7 @@ package recommender
 
 import (
 	"fmt"
-	"github.com/DataDog/datadog-go/statsd"
+	"github.com/DataDog/datadog-go/v5/statsd"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
@@ -25,6 +25,14 @@ type record struct {
 
 type recordingClient struct {
 	records []record
+}
+
+func (rc *recordingClient) IsClosed() bool {
+	panic("unexpected API Call in test.")
+}
+
+func (rc *recordingClient) GetTelemetry() statsd.Telemetry {
+	panic("unexpected API Call in test.")
 }
 
 func (rc *recordingClient) Count(name string, value int64, tags []string, rate float64) error {

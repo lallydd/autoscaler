@@ -34,13 +34,13 @@ import (
 
 const (
 	metricsNamespace            = metrics.TopMetricsNamespace + "recommender"
-	metricObjectCount           = "dd_vpa.objects_count"
-	metricVpaMatchedCount       = "dd_vpa.matched_pod_count"
-	metricVpaUnmatchedCount     = "dd_vpa.unmatched_pod_count"
-	metricPodDiffCores          = "dd_vpa.pod_diff_cores"
-	metricPodDiffMib            = "dd_vpa.pod_diff_mib"
-	metricContainerDiffCores    = "dd_vpa.container_diff_cores"
-	metricContainerDiffMib      = "dd_vpa.container_diff_mib"
+	metricObjectCount           = "objects_count"
+	metricVpaMatchedCount       = "matched_pod_count"
+	metricVpaUnmatchedCount     = "unmatched_pod_count"
+	metricPodDiffCores          = "pod_diff_cores"
+	metricPodDiffMib            = "pod_diff_mib"
+	metricContainerDiffCores    = "container_diff_cores"
+	metricContainerDiffMib      = "container_diff_mib"
 	metricRecommendationLatency = "recommendation_latency_seconds"
 	metricAggContainerStates    = "aggregate_container_states_count"
 )

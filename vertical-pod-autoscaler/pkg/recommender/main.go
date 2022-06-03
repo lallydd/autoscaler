@@ -18,7 +18,7 @@ package main
 
 import (
 	"flag"
-	// "github.com/DataDog/datadog-go/statsd"
+	// Do not use "github.com/DataDog/datadog-go/statsd", it doesn't seem to work.
 	"github.com/DataDog/datadog-go/v5/statsd"
 	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
 	"net"
