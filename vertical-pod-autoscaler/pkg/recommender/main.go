@@ -18,7 +18,8 @@ package main
 
 import (
 	"flag"
-	"github.com/DataDog/datadog-go/statsd"
+	// "github.com/DataDog/datadog-go/statsd"
+	"github.com/DataDog/datadog-go/v5/statsd"
 	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
 	"net"
 	"os"
@@ -125,7 +126,7 @@ func main() {
 		agentAddr = *agentAddress
 	}
 
-	client, err := statsd.New(agentAddr)
+	client, err := statsd.New(agentAddr, statsd.WithNamespace("dd_vpa"), statsd.WithOriginDetection(), statsd.WithoutClientSideAggregation())
 	if err != nil {
 		klog.Fatalf("Failed creating agent: %v", err)
 	} else {

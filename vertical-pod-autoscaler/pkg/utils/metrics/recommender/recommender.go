@@ -28,7 +28,7 @@ import (
 
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
 
-	"github.com/DataDog/datadog-go/statsd"
+	"github.com/DataDog/datadog-go/v5/statsd"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics"
 )
 
@@ -104,7 +104,7 @@ func NewExecutionTimer() *metrics.ExecutionTimer {
 
 // ObserveRecommendationLatency observes the time it took for the first recommendation to appear
 func ObserveRecommendationLatency(created time.Time) {
-	err := statsdClient.Histogram(metricRecommendationLatency, time.Since(created).Seconds(), nil, 0)
+	err := statsdClient.Histogram(metricRecommendationLatency, time.Since(created).Seconds(), nil, 1)
 	if err != nil {
 		klog.Errorf("Failed to write metric %s: %v", metricRecommendationLatency, err)
 	}
@@ -113,7 +113,7 @@ func ObserveRecommendationLatency(created time.Time) {
 
 // RecordAggregateContainerStatesCount records the number of containers being tracked by the recommender
 func RecordAggregateContainerStatesCount(statesCount int) {
-	err := statsdClient.Gauge(metricAggContainerStates, float64(statesCount), nil, 0.0)
+	err := statsdClient.Gauge(metricAggContainerStates, float64(statesCount), nil, 1.0)
 	if err != nil {
 		klog.Errorf("Failed to write metric %s: %v", metricAggContainerStates, err)
 	}
@@ -242,13 +242,13 @@ func RecordContainerRequestDiff(containerName string, podNS string, podName stri
 // from those calls.
 func FinishScan() {
 	for tagKey, count := range matchedPods {
-		err := statsdClient.Gauge(metricVpaMatchedCount, float64(count), podKeys[tagKey], 0.0)
+		err := statsdClient.Gauge(metricVpaMatchedCount, float64(count), podKeys[tagKey], 1.0)
 		if err != nil {
 			klog.Errorf("Failed to write metric %s: %v", metricVpaMatchedCount, err)
 		}
 	}
 	for tagKey, count := range unmatchedPods {
-		err := statsdClient.Gauge(metricVpaUnmatchedCount, float64(count), podKeys[tagKey], 0.0)
+		err := statsdClient.Gauge(metricVpaUnmatchedCount, float64(count), podKeys[tagKey], 1.0)
 		if err != nil {
 			klog.Errorf("Failed to write metric %s: %v", metricVpaUnmatchedCount, err)
 		}
@@ -324,7 +324,7 @@ func labelsFor(oc objectCounterKey) []string {
 func (oc *ObjectCounter) Observe() {
 	klog.Infof("Observe(): Writing out %d key/value pairs for %s", len(oc.cnt), metricObjectCount)
 	for k, v := range oc.cnt {
-		err := statsdClient.Gauge(metricObjectCount, float64(v), labelsFor(k), 0.0)
+		err := statsdClient.Gauge(metricObjectCount, float64(v), labelsFor(k), 1.0)
 		if err != nil {
 			klog.Errorf("Failed to write metric %s: %v", metricObjectCount, err)
 		}
