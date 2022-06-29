@@ -42,7 +42,7 @@ import (
 const DefaultRecommenderName = "default"
 
 var (
-	metricsFetcherInterval  = flag.Duration("recommender-interval", 1*time.Minute, `How often metrics should be fetched`)
+	metricsFetcherInterval  = flag.Duration("recommender-interval", 10*time.Minute, `How often metrics should be fetched`)
 	checkpointsGCInterval   = flag.Duration("checkpoints-gc-interval", 10*time.Minute, `How often orphaned checkpoints should be garbage collected`)
 	snapshotHistoryInterval = flag.Duration("dd-history-interval", 10*time.Second, `How far back in time to look for a snapshot of data (datadog only)`)
 	prometheusAddress       = flag.String("prometheus-address", "", `Where to reach for Prometheus metrics`)

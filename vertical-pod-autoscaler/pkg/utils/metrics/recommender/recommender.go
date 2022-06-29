@@ -117,7 +117,6 @@ func RecordAggregateContainerStatesCount(statesCount int) {
 	if err != nil {
 		klog.Errorf("Failed to write metric %s: %v", metricAggContainerStates, err)
 	}
-
 }
 
 func saveLabels(set labels.Labels) string {
