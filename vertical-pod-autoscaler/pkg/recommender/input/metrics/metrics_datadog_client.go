@@ -327,7 +327,7 @@ func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, cl
 				"site": site,
 			})
 	}
-	klog.V(2).Infof("NewDatadogClient(%v, %s)", queryInterval, cluster)
+	klog.V(2).Infof("NewDatadogClient(%v, %s, site=%s)", queryInterval, cluster, site)
 	configuration := datadog.NewConfiguration()
 	apiClient := newApiClient(configuration)
 

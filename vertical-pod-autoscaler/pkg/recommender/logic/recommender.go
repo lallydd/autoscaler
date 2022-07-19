@@ -58,7 +58,7 @@ type podResourceRecommender struct {
 func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggregateStateMap model.ContainerNameToAggregateStateMap) RecommendedPodResources {
 	var recommendation = make(RecommendedPodResources)
 	if len(containerNameToAggregateStateMap) == 0 {
-		klog.V(4).Infof("Recommendation: No keys in state map.")
+		klog.V(6).Infof("Recommendation: No keys in state map.")
 		return recommendation
 	}
 
