@@ -18,7 +18,9 @@ package logic
 
 import (
 	"flag"
+	"fmt"
 	"math"
+	"strings"
 
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
 	"k8s.io/klog/v2"
@@ -30,9 +32,17 @@ var (
 	podMinMemoryMb       = flag.Float64("pod-recommendation-min-memory-mb", 250, `Minimum memory recommendation for a pod`)
 )
 
+const (
+	annotationObjectType          = "vpa.datadoghq.com/type"
+	annotationPreferredUpdateMode = "vpa.datadoghq.com/updateMode"
+	annotationQosEnable           = "vpa.datadoghq.com/qosEnable"
+
+	objectTypeDaemonSet = "DaemonSet"
+)
+
 // PodResourceRecommender computes resource recommendation for a Vpa object.
 type PodResourceRecommender interface {
-	GetRecommendedPodResources(containerNameToAggregateStateMap model.ContainerNameToAggregateStateMap) RecommendedPodResources
+	GetRecommendedPodResources(containerNameToAggregateStateMap model.ContainerNameToAggregateStateMap, podAnnotations map[string]string) RecommendedPodResources
 }
 
 // RecommendedPodResources is a Map from container name to recommended resources.
@@ -49,13 +59,53 @@ type RecommendedContainerResources struct {
 	UpperBound model.Resources
 }
 
-type podResourceRecommender struct {
+type AnnotationsPredicate func(map[string]string) bool
+
+type podResourceRecommenderEntry struct {
+	predicate           AnnotationsPredicate
 	targetEstimator     ResourceEstimator
 	lowerBoundEstimator ResourceEstimator
 	upperBoundEstimator ResourceEstimator
 }
 
-func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggregateStateMap model.ContainerNameToAggregateStateMap) RecommendedPodResources {
+type podResourceRecommender struct {
+	entries []podResourceRecommenderEntry
+}
+
+func acceptAll(map[string]string) bool { return true }
+
+func acceptQoS(annotations map[string]string) bool {
+	// The QoS enable flag has primary control.  Then we go by type.
+	if qosEnable, qosOk := annotations[annotationQosEnable]; qosOk {
+		qosEnable = strings.ToLower(qosEnable)
+		if qosEnable == "false" {
+			return false
+		}
+		// Only useful when the other conditions below might disable QoS
+		if qosEnable == "true" {
+			return true
+		}
+	}
+	if obType, otypeOk := annotations[annotationObjectType]; otypeOk {
+		if obType == objectTypeDaemonSet {
+			return false
+		}
+	}
+	// QoS by default.
+	return true
+}
+
+func (r *podResourceRecommender) recommenderForAnnotations(podAnnotations map[string]string) podResourceRecommenderEntry {
+	for _, ent := range r.entries {
+		if ent.predicate(podAnnotations) {
+			return ent
+		}
+	}
+	panic(fmt.Sprintf("No recommender found for annotation set %+v, the last one should always apply!", podAnnotations))
+}
+
+func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggregateStateMap model.ContainerNameToAggregateStateMap,
+	podAnnotations map[string]string) RecommendedPodResources {
 	var recommendation = make(RecommendedPodResources)
 	if len(containerNameToAggregateStateMap) == 0 {
 		klog.V(6).Infof("Recommendation: No keys in state map.")
@@ -68,10 +118,12 @@ func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggre
 		model.ResourceMemory: model.ScaleResource(model.MemoryAmountFromBytes(*podMinMemoryMb*1024*1024), fraction),
 	}
 
-	recommender := &podResourceRecommender{
-		WithMinResources(minResources, r.targetEstimator),
-		WithMinResources(minResources, r.lowerBoundEstimator),
-		WithMinResources(minResources, r.upperBoundEstimator),
+	rec := r.recommenderForAnnotations(podAnnotations)
+	recommender := &podResourceRecommenderEntry{
+		acceptAll,
+		WithMinResources(minResources, rec.targetEstimator),
+		WithMinResources(minResources, rec.lowerBoundEstimator),
+		WithMinResources(minResources, rec.upperBoundEstimator),
 	}
 
 	for containerName, aggregatedContainerState := range containerNameToAggregateStateMap {
@@ -90,7 +142,7 @@ func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggre
 }
 
 // Takes AggregateContainerState and returns a container recommendation.
-func (r *podResourceRecommender) estimateContainerResources(s *model.AggregateContainerState) RecommendedContainerResources {
+func (r *podResourceRecommenderEntry) estimateContainerResources(s *model.AggregateContainerState) RecommendedContainerResources {
 	return RecommendedContainerResources{
 		FilterControlledResources(r.targetEstimator.GetResourceEstimation(s), s.GetControlledResources()),
 		FilterControlledResources(r.lowerBoundEstimator.GetResourceEstimation(s), s.GetControlledResources()),
@@ -154,13 +206,27 @@ func CreatePodResourceRecommender(cpuQos bool, percentile float64) PodResourceRe
 	// 60m history  : *0.95
 	lowerBoundEstimator = WithConfidenceMultiplier(0.001, -2.0, lowerBoundEstimator)
 
-	if cpuQos {
-		targetEstimator = WithCeilCpuEstimator(targetEstimator)
-		lowerBoundEstimator = WithCeilCpuEstimator(lowerBoundEstimator)
-		upperBoundEstimator = WithCeilCpuEstimator(upperBoundEstimator)
-	}
-	return &podResourceRecommender{
+	baseEstimator := &podResourceRecommenderEntry{
+		acceptAll,
 		targetEstimator,
 		lowerBoundEstimator,
-		upperBoundEstimator}
+		upperBoundEstimator,
+	}
+
+	// If we have QoS enabled, put it ahead of the base recommender on the list, and use the right predicate to
+	// make it apply only when it matters.
+	if cpuQos {
+		qosEstimator := &podResourceRecommenderEntry{
+			acceptQoS,
+			WithCeilCpuEstimator(targetEstimator),
+			WithCeilCpuEstimator(lowerBoundEstimator),
+			WithCeilCpuEstimator(upperBoundEstimator),
+		}
+		return &podResourceRecommender{
+			[]podResourceRecommenderEntry{*qosEstimator, *baseEstimator},
+		}
+	}
+	return &podResourceRecommender{
+		[]podResourceRecommenderEntry{*baseEstimator},
+	}
 }

@@ -33,11 +33,16 @@ import (
 	resourceclient "k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1beta1"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+)
+
+const (
+	appURLPrefix = "app."
 )
 
 type baseClient interface {
@@ -318,15 +323,33 @@ func newDatadogClientWithFactory(queryInterval time.Duration, cluster string, cl
 			},
 		},
 	)
-
-	site, siteOk := authData["site"]
+	site, siteOk := authData["dd_url"]
 	if siteOk {
+		// Copied shamelessly from github.com/DataDog/disruption-budge-manager/pkg/ddclient/ddclient.go
+		datadogAPIURL, err := url.ParseRequestURI(site)
+		if err != nil {
+			return nil
+		}
+		// the configured datadgog url on our clusters may be configured to start with the app prefix
+		// however the `site` parameter does not support that (it prepends an api prefix), so trim the app prefix if present
+		// see https://docs.google.com/document/d/1dqd7X8iTqMw3e61C7ucfZ22Uf22_oAv8qDxdhbDKb58/edit#heading=h.ipmfddl3vahq for more information
+		site = datadogAPIURL.Host
+		if strings.HasPrefix(site, appURLPrefix) {
+			site = site[len(appURLPrefix):]
+		}
+		ctx = context.WithValue(ctx,
+			datadog.ContextServerVariables,
+			map[string]string{
+				"site": site,
+			})
+	} else if site, siteOk = authData["site"]; siteOk {
 		ctx = context.WithValue(ctx,
 			datadog.ContextServerVariables,
 			map[string]string{
 				"site": site,
 			})
 	}
+
 	klog.V(2).Infof("NewDatadogClient(%v, %s, site=%s)", queryInterval, cluster, site)
 	configuration := datadog.NewConfiguration()
 	apiClient := newApiClient(configuration)

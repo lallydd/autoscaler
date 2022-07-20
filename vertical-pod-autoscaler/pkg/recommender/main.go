@@ -72,8 +72,8 @@ var (
 	extraReportingTags = flag.String("dd-extra-reporting-tags", ``, "Comma-separated list of tag keys to report with metrics")
 	clientApiSecrets   = flag.String("dd-keys-file", "/etc/datadog-client.json", "JSON file with apiKeyAuth, appKeyAuth keys and values.")
 	agentAddress       = flag.String("dd-agent", ``, "host:port for dogstatsd")
-	cpuQosMod          = flag.Bool("dd-cpu-guaranteed-qos", false, `Set requests=limits=ceil(reqPercentile of cpu) to use Guaranteed QoS CPU`)
-	reqPercentile      = flag.Float64("dd-request-percentile", 90.0, "Percentile of usage to set requests to.")
+	cpuQosMod          = flag.Bool("dd-cpu-guaranteed-qos", false, `Set requests=ceil(reqPercentile of cpu) to use Guaranteed QoS CPU`)
+	reqPercentile      = flag.Float64("dd-request-percentile", 95.0, "Percentile of usage to set requests to.")
 )
 
 // Aggregation configuration flags
