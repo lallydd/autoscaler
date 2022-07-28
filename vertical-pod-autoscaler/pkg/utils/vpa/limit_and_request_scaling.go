@@ -31,6 +31,45 @@ type ContainerResources struct {
 	Requests core.ResourceList
 }
 
+// GetQoSLimit returns the limit=request core count (when integral, proportional otherwise) and memory.
+func GetQoSLimit(originalLimit, originalRequest, recommendation, defaultLimit core.ResourceList) (core.ResourceList, []string) {
+	var cpuLimit, memLimit *resource.Quantity
+	var annotation string
+	annotations := []string{}
+	inQoS := false
+	if recommendation.Cpu().MilliValue()%1000 == 0 {
+		cpuLimit = recommendation.Cpu()
+		inQoS = true
+		annotation = "CPU in QoS mode"
+	} else {
+		cpuLimit, annotation = getProportionalResourceLimit(core.ResourceCPU, originalLimit.Cpu(), originalRequest.Cpu(), recommendation.Cpu(), defaultLimit.Cpu())
+	}
+	if annotation != "" {
+		annotations = append(annotations, annotation)
+	}
+	if inQoS {
+		memLimit = recommendation.Memory()
+		annotation = "Memory set for QoS mode"
+	} else {
+		memLimit, annotation = getProportionalResourceLimit(core.ResourceMemory, originalLimit.Memory(), originalRequest.Memory(), recommendation.Memory(), defaultLimit.Memory())
+	}
+	if annotation != "" {
+		annotations = append(annotations, annotation)
+	}
+	if memLimit == nil && cpuLimit == nil {
+		return nil, []string{}
+	}
+	result := core.ResourceList{}
+	if cpuLimit != nil {
+		result[core.ResourceCPU] = *cpuLimit
+	}
+	if memLimit != nil {
+		result[core.ResourceMemory] = *memLimit
+	}
+	return result, annotations
+
+}
+
 // GetProportionalLimit returns limit that will be in the same proportion to recommended request as original limit had to original request.
 func GetProportionalLimit(originalLimit, originalRequest, recommendation, defaultLimit core.ResourceList) (core.ResourceList, []string) {
 	annotations := []string{}

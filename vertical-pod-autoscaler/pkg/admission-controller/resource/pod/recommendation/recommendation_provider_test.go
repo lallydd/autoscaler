@@ -356,3 +356,51 @@ func TestUpdateResourceRequests(t *testing.T) {
 
 	}
 }
+
+func makeResourceList(millicores, mib int64) apiv1.ResourceList {
+	cores := resource.NewMilliQuantity(millicores, resource.DecimalSI)
+	mem := resource.NewQuantity(mib*1048576, resource.DecimalSI)
+	return apiv1.ResourceList{apiv1.ResourceCPU: *cores, apiv1.ResourceMemory: *mem}
+}
+
+func Test_percentageToTarget(t *testing.T) {
+	type args struct {
+		requests   apiv1.ResourceList
+		target     apiv1.ResourceList
+		proportion float64
+		inQoS      bool
+	}
+	tests := []struct {
+		name string
+		args args
+		want apiv1.ResourceList
+	}{
+		{"Negative", args{makeResourceList(1000, 1024), makeResourceList(500, 512), .50, false},
+			makeResourceList(750, 768)},
+		{"Half", args{makeResourceList(500, 512), makeResourceList(1000, 1024), .50, false},
+			makeResourceList(750, 768)},
+		{"No Scaling", args{makeResourceList(500, 512), makeResourceList(1000, 1024), 0.0, false},
+			makeResourceList(500, 512)},
+		{"All the Way", args{makeResourceList(500, 512), makeResourceList(1000, 1024), 1.0, false},
+			makeResourceList(1000, 1024)},
+		{"Negative QoS Tight  - Early", args{makeResourceList(4200, 1024), makeResourceList(4000, 1024), 0.0, true},
+			makeResourceList(4000, 1024)},
+		{"Negative QoS Tight - Late", args{makeResourceList(4200, 1024), makeResourceList(4000, 1024), .95, true},
+			makeResourceList(4000, 1024)},
+		{"QoS Wide - Start", args{makeResourceList(500, 1024), makeResourceList(6000, 1024), .00, true},
+			makeResourceList(1000, 1024)},
+		{"QoS Wide - Early", args{makeResourceList(500, 1024), makeResourceList(6000, 1024), .01, true},
+			makeResourceList(1000, 1024)},
+		{"QoS Wide - Mid", args{makeResourceList(500, 1024), makeResourceList(6000, 1024), .65, true},
+			makeResourceList(4000, 1024)},
+		{"QoS Wide - Late", args{makeResourceList(500, 1024), makeResourceList(6000, 1024), .98, true},
+			makeResourceList(6000, 1024)},
+		{"QoS Wide - End", args{makeResourceList(500, 1024), makeResourceList(6000, 1024), 1.0, true},
+			makeResourceList(6000, 1024)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, percentageToTarget(tt.args.requests, tt.args.target, tt.args.proportion, tt.args.inQoS), "percentageToTarget(%v, %v)", tt.args.requests, tt.args.target)
+		})
+	}
+}
