@@ -18,6 +18,7 @@ package api
 
 import (
 	"fmt"
+	"k8s.io/klog/v2"
 	"math"
 	"math/big"
 
@@ -34,29 +35,15 @@ type ContainerResources struct {
 // GetQoSLimit returns the limit=request core count (when integral, proportional otherwise) and memory.
 func GetQoSLimit(originalLimit, originalRequest, recommendation, defaultLimit core.ResourceList) (core.ResourceList, []string) {
 	var cpuLimit, memLimit *resource.Quantity
-	var annotation string
 	annotations := []string{}
-	inQoS := false
-	if recommendation.Cpu().MilliValue()%1000 == 0 {
-		cpuLimit = recommendation.Cpu()
-		inQoS = true
-		annotation = "CPU in QoS mode"
-	} else {
-		cpuLimit, annotation = getProportionalResourceLimit(core.ResourceCPU, originalLimit.Cpu(), originalRequest.Cpu(), recommendation.Cpu(), defaultLimit.Cpu())
+	if recommendation.Cpu().MilliValue()%1000 != 0 {
+		klog.Warningf("QoS mode but CPU recommendation isn't a full core: %v", recommendation)
 	}
-	if annotation != "" {
-		annotations = append(annotations, annotation)
-	}
-	if inQoS {
-		memLimit = recommendation.Memory()
-		annotation = "Memory set for QoS mode"
-	} else {
-		memLimit, annotation = getProportionalResourceLimit(core.ResourceMemory, originalLimit.Memory(), originalRequest.Memory(), recommendation.Memory(), defaultLimit.Memory())
-	}
-	if annotation != "" {
-		annotations = append(annotations, annotation)
-	}
-	if memLimit == nil && cpuLimit == nil {
+	cpuLimit = recommendation.Cpu()
+	memLimit = recommendation.Memory()
+	annotations = append(annotations, fmt.Sprintf("QoS mode, setting requests and limits to recommendation (possibly proportionally).  Original request; %v, Recommendation: %v", originalRequest, recommendation))
+
+	if memLimit == nil || cpuLimit == nil {
 		return nil, []string{}
 	}
 	result := core.ResourceList{}

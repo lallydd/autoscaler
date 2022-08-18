@@ -19,6 +19,7 @@ package logic
 import (
 	"flag"
 	"fmt"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/annotations"
 	"math"
 	"strings"
 
@@ -105,7 +106,7 @@ func (r *podResourceRecommender) recommenderForAnnotations(podAnnotations map[st
 }
 
 func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggregateStateMap model.ContainerNameToAggregateStateMap,
-	podAnnotations map[string]string) RecommendedPodResources {
+	vpaAnnotations map[string]string) RecommendedPodResources {
 	var recommendation = make(RecommendedPodResources)
 	if len(containerNameToAggregateStateMap) == 0 {
 		klog.V(6).Infof("Recommendation: No keys in state map.")
@@ -118,7 +119,7 @@ func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggre
 		model.ResourceMemory: model.ScaleResource(model.MemoryAmountFromBytes(*podMinMemoryMb*1024*1024), fraction),
 	}
 
-	rec := r.recommenderForAnnotations(podAnnotations)
+	rec := r.recommenderForAnnotations(vpaAnnotations)
 	recommender := &podResourceRecommenderEntry{
 		acceptAll,
 		WithMinResources(minResources, rec.targetEstimator),
@@ -126,8 +127,13 @@ func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggre
 		WithMinResources(minResources, rec.upperBoundEstimator),
 	}
 
+	extensions, err := annotations.ParseDatadogExtensions(vpaAnnotations)
+	if err != nil {
+		klog.V(2).Infof("Failed parsigng vpa annotations: %v", *err)
+	}
+	options := ResourceEstimatorOptions{Extensions: extensions}
 	for containerName, aggregatedContainerState := range containerNameToAggregateStateMap {
-		recommendation[containerName] = recommender.estimateContainerResources(aggregatedContainerState)
+		recommendation[containerName] = recommender.estimateContainerResources(aggregatedContainerState, options)
 	}
 
 	numContainers, numSamples := 0, 0
@@ -142,11 +148,12 @@ func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggre
 }
 
 // Takes AggregateContainerState and returns a container recommendation.
-func (r *podResourceRecommenderEntry) estimateContainerResources(s *model.AggregateContainerState) RecommendedContainerResources {
+func (r *podResourceRecommenderEntry) estimateContainerResources(s *model.AggregateContainerState,
+	options ResourceEstimatorOptions) RecommendedContainerResources {
 	return RecommendedContainerResources{
-		FilterControlledResources(r.targetEstimator.GetResourceEstimation(s), s.GetControlledResources()),
-		FilterControlledResources(r.lowerBoundEstimator.GetResourceEstimation(s), s.GetControlledResources()),
-		FilterControlledResources(r.upperBoundEstimator.GetResourceEstimation(s), s.GetControlledResources()),
+		FilterControlledResources(r.targetEstimator.GetResourceEstimation(s, options), s.GetControlledResources()),
+		FilterControlledResources(r.lowerBoundEstimator.GetResourceEstimation(s, options), s.GetControlledResources()),
+		FilterControlledResources(r.upperBoundEstimator.GetResourceEstimation(s, options), s.GetControlledResources()),
 	}
 }
 
@@ -165,11 +172,11 @@ func FilterControlledResources(estimation model.Resources, controlledResources [
 func CreatePodResourceRecommender(cpuQos bool, percentile float64) PodResourceRecommender {
 	targetCPUPercentile := percentile
 	lowerBoundCPUPercentile := 0.5
-	upperBoundCPUPercentile := math.Max(0.95, percentile)
+	upperBoundCPUPercentile := math.Max(0.995, percentile)
 
-	targetMemoryPeaksPercentile := 0.9
+	targetMemoryPeaksPercentile := percentile
 	lowerBoundMemoryPeaksPercentile := 0.5
-	upperBoundMemoryPeaksPercentile := 0.95
+	upperBoundMemoryPeaksPercentile := math.Max(0.995, percentile)
 
 	targetEstimator := NewPercentileEstimator(targetCPUPercentile, targetMemoryPeaksPercentile)
 	lowerBoundEstimator := NewPercentileEstimator(lowerBoundCPUPercentile, lowerBoundMemoryPeaksPercentile)
@@ -218,9 +225,9 @@ func CreatePodResourceRecommender(cpuQos bool, percentile float64) PodResourceRe
 	if cpuQos {
 		qosEstimator := &podResourceRecommenderEntry{
 			acceptQoS,
-			WithCeilCpuEstimator(targetEstimator),
-			WithCeilCpuEstimator(lowerBoundEstimator),
-			WithCeilCpuEstimator(upperBoundEstimator),
+			WithQosRoundingEstimator(targetEstimator),
+			WithQosRoundingEstimator(lowerBoundEstimator),
+			WithQosRoundingEstimator(upperBoundEstimator),
 		}
 		return &podResourceRecommender{
 			[]podResourceRecommenderEntry{*qosEstimator, *baseEstimator},

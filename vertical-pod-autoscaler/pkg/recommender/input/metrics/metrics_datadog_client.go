@@ -47,6 +47,7 @@ const (
 
 type baseClient interface {
 	QueryMetrics(context context.Context, interval time.Duration, query string) (datadog.MetricsQueryResponse, *http.Response, error)
+	GetRateLimitStats() error
 }
 
 type ddclientMetrics struct {
@@ -159,8 +160,9 @@ func makeResourceList(cpu float64, mem float64) map[v1.ResourceName]resource.Qua
 }
 
 // This API is only really designed for 1 snapshot value!  My timestamp handling here is mostly a
-// problem of not screwing up something simple and subtle.  So, scan the list for the _most_ recent
-// timestamp on both cpu and rss.
+// problem of not screwing up something simple and subtle.  So, scan the list for the _least_ recent
+// timestamp on both cpu and rss.  As we're doing periodic sampling, that's fine.  The most
+// recent timestamp may be partial data.
 // Presumes that all values are for the same pod (tag: pod_name).
 func (d ddclientPodMetrics) aggregatePodMetrics(podName string, cpuResp []datadog.MetricsQueryMetadata,
 	memResp []datadog.MetricsQueryMetadata) *v1beta1.PodMetrics {
@@ -195,7 +197,7 @@ func (d ddclientPodMetrics) aggregatePodMetrics(podName string, cpuResp []datado
 	sort.Float64s(timestamps)
 	selection := -1.0
 FindTimestamp:
-	for t := len(timestamps) - 1; t >= 0; t-- {
+	for t := 0; t < len(timestamps); t++ {
 		ts := data[timestamps[t]]
 		for container := range ts {
 			if _, mem := ts[container]["memory"]; mem {
@@ -378,7 +380,15 @@ type clientWrapper struct {
 }
 
 func (c clientWrapper) QueryMetrics(context context.Context, interval time.Duration, query string) (datadog.MetricsQueryResponse, *http.Response, error) {
-	return c.ApiClient.MetricsApi.QueryMetrics(context, time.Now().Add(interval).Unix(), time.Now().Unix(), query)
+	resp, http, err := c.ApiClient.MetricsApi.QueryMetrics(context, time.Now().Add(interval).Unix(), time.Now().Unix(), query)
+	headers := http.Header
+	// http.Header is a map[string][]string
+	for k, vs := range headers {
+		if strings.HasPrefix(strings.ToLower(k), "x-ratelimit") {
+			klog.V(2).Infof("Query header: %s, %v", k, vs)
+		}
+	}
+	return resp, http, err
 }
 
 func NewDatadogClient(queryInterval time.Duration, cluster string, clientApiSecrets string, extraTags []string) resourceclient.PodMetricsesGetter {

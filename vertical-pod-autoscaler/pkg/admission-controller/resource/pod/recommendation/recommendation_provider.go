@@ -19,22 +19,14 @@ package recommendation
 import (
 	"flag"
 	"fmt"
-	"k8s.io/apimachinery/pkg/api/resource"
-	"math"
-	"strings"
-
 	core "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	vpa_types "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/apis/autoscaling.k8s.io/v1"
+	vpa_annotations "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/annotations"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/limitrange"
+	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/qos"
 	vpa_api_util "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/vpa"
 	"k8s.io/klog/v2"
-)
-
-const (
-	metadataCopyPrefix            = "vpa.datadoghq.com/"
-	annotationObjectType          = metadataCopyPrefix + "type"
-	annotationPreferredUpdateMode = metadataCopyPrefix + "updateMode"
-	annotationQosEnable           = metadataCopyPrefix + "qosEnable"
 )
 
 var (
@@ -63,8 +55,8 @@ func NewProvider(calculator limitrange.LimitRangeCalculator,
 	}
 }
 
-// percentageToTarget returns an interpolated value between requests and target, where a proportion of 0 is requests, and 1.0 is target.
-func percentageToTarget(requests core.ResourceList, target core.ResourceList, proportion float64, inQoS bool) core.ResourceList {
+// percentageToTarget returns an interpolated value between Requests and target, where a proportion of 0 is Requests, and 1.0 is target.
+func percentageToTarget(requests core.ResourceList, target core.ResourceList, proportion float64) core.ResourceList {
 	reqMem, okReq := requests.Memory().AsInt64()
 	targetMem, okTarget := target.Memory().AsInt64()
 	if !okReq || !okTarget {
@@ -75,69 +67,27 @@ func percentageToTarget(requests core.ResourceList, target core.ResourceList, pr
 
 	// For QoS'd workloads, where the target core count is an integer, round the proportion to an integer too.
 	cpuQuantity := requests.Cpu().MilliValue() + int64(float64(cpuDiff)*proportion)
-	if inQoS && target.Cpu().MilliValue()%1000 == 0 {
-		// This is generalized for whether the target or request are larger.
-		minBound := int64(math.Min(float64(target.Cpu().MilliValue()), float64(requests.Cpu().MilliValue())))
-		maxBound := int64(math.Max(float64(target.Cpu().MilliValue()), float64(requests.Cpu().MilliValue())))
-		remainder := cpuQuantity % 1000
-		upDelta := 1000 - remainder
-		if remainder != 0 {
-			if remainder < 500 {
-				// Try to round down
-				if (cpuQuantity - remainder) < minBound {
-					// Nope, can't round down without going below bounds.  Round up.
-					cpuQuantity += upDelta
-				} else {
-					cpuQuantity -= remainder
-				}
-			} else {
-				// Try to round up.
-				if (cpuQuantity + upDelta) > maxBound {
-					// Nope, can't round up without going above bounds.  Round down .
-					cpuQuantity -= remainder
-				} else {
-					cpuQuantity += upDelta
-				}
-			}
-		}
-	}
 	result := core.ResourceList{
-		core.ResourceCPU:    *resource.NewMilliQuantity(cpuQuantity, resource.DecimalSI),
-		core.ResourceMemory: *resource.NewQuantity(reqMem+int64(float64(memDiff)*proportion), resource.DecimalSI),
+		core.ResourceCPU:    *resource.NewMilliQuantity(cpuQuantity, target.Cpu().Format),
+		core.ResourceMemory: *resource.NewQuantity(reqMem+int64(float64(memDiff)*proportion), target.Memory().Format),
 	}
 	return result
 }
 
 // GetContainersResources returns the recommended resources for each container in the given pod in the same order they are specified in the pod.Spec.
 // If addAll is set to true, containers w/o a recommendation are also added to the list, otherwise they're skipped (default behaviour).  If enableQos
-// is set to true, turn QoS Guaranteed (limits=cores) when the VPA annotations are right and the core count is integral.
+// is set to true, turn QoS Guaranteed (Limits=cores) when the VPA annotations are right and the core count is integral.
 func GetContainersResources(pod *core.Pod, vpaResourcePolicy *vpa_types.PodResourcePolicy, podRecommendation vpa_types.RecommendedPodResources, limitRange *core.LimitRangeItem,
-	addAll bool, annotations vpa_api_util.ContainerToAnnotationsMap, vpaAnnotations map[string]string, enableQos bool) []vpa_api_util.ContainerResources {
-	var proportion float64 = float64(*percentageFlag) / 100.0
+	addAll bool, annotations vpa_api_util.ContainerToAnnotationsMap, vpaAnnotations map[string]string, enableQoS bool) []vpa_api_util.ContainerResources {
+	var proportion = float64(*percentageFlag) / 100.0
 	if (proportion < 0 || proportion > 1.0) && !percentErrorPrinted {
 		klog.Errorf("Invalid value for --percentage.  Treating as 100%.")
 		proportion = 1.0
 		percentErrorPrinted = true
 	}
 	resources := make([]vpa_api_util.ContainerResources, len(pod.Spec.Containers))
-	inQoS := false
-	if enableQos {
-		if k8sType, ok := vpaAnnotations[annotationObjectType]; ok {
-			if k8sType != "DaemonSet" {
-				inQoS = true
-			}
-		}
-		if overrideEnable, ok := vpaAnnotations[annotationQosEnable]; ok {
-			switch strings.ToLower(overrideEnable) {
-			case "true":
-				inQoS = true
-			case "false":
-				inQoS = false
-			default:
-				klog.V(2).Info("invalid annotation %s for pod %s/%s: %s, sticking with QoS mode=%v", annotationQosEnable, pod.Namespace, pod.Name, overrideEnable, inQoS)
-			}
-		}
-	}
+	options, _ := vpa_annotations.ParseDatadogExtensions(vpaAnnotations)
+	inQoS := enableQoS && qos.NeedsQoS(options)
 	for i, container := range pod.Spec.Containers {
 		recommendation := vpa_api_util.GetRecommendationForContainer(container.Name, &podRecommendation)
 		if recommendation == nil {
@@ -148,7 +98,8 @@ func GetContainersResources(pod *core.Pod, vpaResourcePolicy *vpa_types.PodResou
 			klog.V(2).Infof("no matching recommendation found for container %s, using Pod request", container.Name)
 			resources[i].Requests = container.Resources.Requests
 		} else {
-			resources[i].Requests = percentageToTarget(container.Resources.Requests, recommendation.Target, proportion, inQoS)
+			scaledResources := percentageToTarget(container.Resources.Requests, recommendation.Target, proportion)
+			resources[i].Requests = qos.RoundResourceListToPolicy(options, scaledResources)
 		}
 		defaultLimit := core.ResourceList{}
 		if limitRange != nil {

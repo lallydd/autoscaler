@@ -56,9 +56,9 @@ var (
 )
 
 type RecommenderOptions struct {
-	// Use
+	// Round CPU Requests up to the next integer.
 	cpuQos bool
-	// Which percentile to use.  Default is 90.
+	// Which percentile to use.  Default is 95.
 	percentile float64
 }
 
