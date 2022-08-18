@@ -129,7 +129,7 @@ func (r *podResourceRecommender) GetRecommendedPodResources(containerNameToAggre
 
 	extensions, err := annotations.ParseDatadogExtensions(vpaAnnotations)
 	if err != nil {
-		klog.V(2).Infof("Failed parsigng vpa annotations: %v", *err)
+		klog.V(2).Infof("Failed parsing vpa annotations on %+v: %v", vpaAnnotations, err)
 	}
 	options := ResourceEstimatorOptions{Extensions: extensions}
 	for containerName, aggregatedContainerState := range containerNameToAggregateStateMap {

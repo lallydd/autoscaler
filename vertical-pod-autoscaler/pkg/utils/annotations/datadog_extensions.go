@@ -34,7 +34,7 @@ type DatadogExtensions struct {
 	RamPerCore           resource.Quantity
 }
 
-func ParseDatadogExtensions(annotations map[string]string) (DatadogExtensions, *error) {
+func ParseDatadogExtensions(annotations map[string]string) (DatadogExtensions, error) {
 	result := DatadogExtensions{
 		ObjectTypeSpecified:  false,
 		ObjectType:           "",
@@ -47,7 +47,7 @@ func ParseDatadogExtensions(annotations map[string]string) (DatadogExtensions, *
 		RamPerCoreSpecified:  false,
 		RamPerCore:           *resource.NewQuantity(0, resource.DecimalSI),
 	}
-	lastError := new(error)
+	var lastError error
 	if v, ok := annotations[AnnotationObjectType]; ok {
 		switch v {
 		case "Deployment":
@@ -68,7 +68,7 @@ func ParseDatadogExtensions(annotations map[string]string) (DatadogExtensions, *
 			result.QoSSpecified = true
 			result.QoSEnable = val
 		} else {
-			lastError = &err
+			lastError = err
 		}
 	}
 	if v, ok := annotations[AnnotationPreferredUpdateMode]; ok {
@@ -87,7 +87,7 @@ func ParseDatadogExtensions(annotations map[string]string) (DatadogExtensions, *
 			result.UpdateMode = v1alpha1.UpdateMode(v)
 		default:
 			err := fmt.Errorf("invalid UpdateMode: %v", v)
-			lastError = &err
+			lastError = err
 		}
 	}
 	if v, ok := annotations[AnnotationCoreDivisor]; ok {
@@ -96,7 +96,7 @@ func ParseDatadogExtensions(annotations map[string]string) (DatadogExtensions, *
 			result.CoreDivisorSpecified = true
 			result.CoreDivisor = value
 		} else {
-			lastError = &err
+			lastError = err
 		}
 	}
 	if v, ok := annotations[AnnotationRamPerCore]; ok {
@@ -105,7 +105,7 @@ func ParseDatadogExtensions(annotations map[string]string) (DatadogExtensions, *
 			result.RamPerCoreSpecified = true
 			result.RamPerCore = value
 		} else {
-			lastError = &err
+			lastError = err
 		}
 	}
 
