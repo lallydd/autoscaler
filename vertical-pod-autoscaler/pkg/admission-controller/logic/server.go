@@ -84,6 +84,7 @@ func (s *AdmissionServer) admit(data []byte) (*v1.AdmissionResponse, metrics_adm
 		resource = handler.AdmissionResource()
 
 		if handler.DisallowIncorrectObjects() && err != nil {
+			klog.Errorf("Disallowing object %+v: %v", ar.Request, err)
 			// we don't let in problematic objects - late validation
 			status := metav1.Status{}
 			status.Status = "Failure"
@@ -109,7 +110,7 @@ func (s *AdmissionServer) admit(data []byte) (*v1.AdmissionResponse, metrics_adm
 		patchType := v1.PatchTypeJSONPatch
 		response.PatchType = &patchType
 		response.Patch = patch
-		klog.V(4).Infof("Sending patches: %v", patches)
+		klog.V(3).Infof("Sending patches: %v", patches)
 	}
 
 	var status metrics_admission.AdmissionStatus
@@ -145,6 +146,7 @@ func (s *AdmissionServer) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reviewResponse, status, resource := s.admit(body)
+	klog.Infof("Admit: %+v: response: %+v, status: %+v, resource: %+v", body, reviewResponse, status, resource)
 	ar := v1.AdmissionReview{
 		Response: reviewResponse,
 		TypeMeta: metav1.TypeMeta{
