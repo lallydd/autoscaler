@@ -66,7 +66,6 @@ func (s *AdmissionServer) admit(data []byte) (*v1.AdmissionResponse, metrics_adm
 		klog.Error(err)
 		return &response, metrics_admission.Error, metrics_admission.Unknown
 	}
-
 	response.UID = ar.Request.UID
 
 	var patches []resource.PatchRecord
@@ -146,7 +145,6 @@ func (s *AdmissionServer) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reviewResponse, status, resource := s.admit(body)
-	klog.Infof("Admit: %+v: response: %+v, status: %+v, resource: %+v", body, reviewResponse, status, resource)
 	ar := v1.AdmissionReview{
 		Response: reviewResponse,
 		TypeMeta: metav1.TypeMeta{
