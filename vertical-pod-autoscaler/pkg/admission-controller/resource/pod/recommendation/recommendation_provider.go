@@ -92,14 +92,16 @@ func GetContainersResources(pod *core.Pod, vpaResourcePolicy *vpa_types.PodResou
 		recommendation := vpa_api_util.GetRecommendationForContainer(container.Name, &podRecommendation)
 		if recommendation == nil {
 			if !addAll {
-				klog.V(2).Infof("no matching recommendation found for container %s, skipping", container.Name)
+				klog.V(2).Infof("%v/%v: no matching recommendation found for container %s, skipping", pod.Namespace, pod.Name, container.Name)
 				continue
 			}
-			klog.V(2).Infof("no matching recommendation found for container %s, using Pod request", container.Name)
+			klog.V(2).Infof("%v/%v: no matching recommendation found for container %s, using its request", pod.Namespace, pod.Name, container.Name)
 			resources[i].Requests = container.Resources.Requests
 		} else {
 			scaledResources := percentageToTarget(container.Resources.Requests, recommendation.Target, proportion)
 			resources[i].Requests = qos.RoundResourceListToPolicy(options, scaledResources)
+			klog.V(2).Infof("%v/%v:%v: With --percentage %v, requests %+v, target %+v, scaled to %+v, setting new requests to %+v",
+				pod.Namespace, pod.Name, container.Name, *percentageFlag, container.Resources.Requests, recommendation.Target, scaledResources, resources[i].Requests)
 		}
 		defaultLimit := core.ResourceList{}
 		if limitRange != nil {
