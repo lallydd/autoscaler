@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	types "k8s.io/apimachinery/pkg/types"
-	"k8s.io/klog/v2"
+	klog "k8s.io/klog/v2"
 	"k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	"k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1alpha1"
 	_ "k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1beta1"

@@ -134,6 +134,7 @@ func NewClusterStateFeeder(config *rest.Config, clusterState *model.ClusterState
 	}.Make()
 }
 
+// NewDefaultMetricsClient returns a metrics client using the stock Metricsv1beta1Client.
 func NewDefaultMetricsClient(config *rest.Config, namespace string) metrics.MetricsClient {
 	metricsGetter := resourceclient.NewForConfigOrDie(config)
 	return metrics.NewMetricsClient(metricsGetter, namespace)
