@@ -18,15 +18,21 @@ package main
 
 import (
 	"flag"
+	// Do not use "github.com/DataDog/datadog-go/statsd", it doesn't seem to work.
+	"github.com/DataDog/datadog-go/v5/statsd"
+	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
+	"net"
+	"os"
+	"strings"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/common"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/history"
+	input_metrics "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/input/metrics"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/model"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/recommender/routines"
 	"k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics"
-	metrics_quality "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/quality"
 	metrics_recommender "k8s.io/autoscaler/vertical-pod-autoscaler/pkg/utils/metrics/recommender"
 	kube_flag "k8s.io/component-base/cli/flag"
 	"k8s.io/klog/v2"
@@ -36,16 +42,18 @@ import (
 const DefaultRecommenderName = "default"
 
 var (
-	metricsFetcherInterval = flag.Duration("recommender-interval", 1*time.Minute, `How often metrics should be fetched`)
-	checkpointsGCInterval  = flag.Duration("checkpoints-gc-interval", 10*time.Minute, `How often orphaned checkpoints should be garbage collected`)
-	prometheusAddress      = flag.String("prometheus-address", "", `Where to reach for Prometheus metrics`)
-	prometheusJobName      = flag.String("prometheus-cadvisor-job-name", "kubernetes-cadvisor", `Name of the prometheus job name which scrapes the cAdvisor metrics`)
-	address                = flag.String("address", ":8942", "The address to expose Prometheus metrics.")
-	kubeconfig             = flag.String("kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
-	kubeApiQps             = flag.Float64("kube-api-qps", 5.0, `QPS limit when making requests to Kubernetes apiserver`)
-	kubeApiBurst           = flag.Float64("kube-api-burst", 10.0, `QPS burst limit when making requests to Kubernetes apiserver`)
+	metricsFetcherInterval  = flag.Duration("recommender-interval", 10*time.Minute, `How often metrics should be fetched`)
+	checkpointsGCInterval   = flag.Duration("checkpoints-gc-interval", 10*time.Minute, `How often orphaned checkpoints should be garbage collected`)
+	snapshotHistoryInterval = flag.Duration("dd-history-interval", 10*time.Second, `How far back in time to look for a snapshot of data (datadog only)`)
+	prometheusAddress       = flag.String("prometheus-address", "", `Where to reach for Prometheus metrics`)
+	prometheusJobName       = flag.String("prometheus-cadvisor-job-name", "kubernetes-cadvisor", `Name of the prometheus job name which scrapes the cAdvisor metrics`)
+	address                 = flag.String("address", ":8942", "The address to expose Prometheus metrics.")
+	kubeconfig              = flag.String("kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
+	kubeApiQps              = flag.Float64("kube-api-qps", 5.0, `QPS limit when making requests to Kubernetes apiserver`)
+	kubeApiBurst            = flag.Float64("kube-api-burst", 10.0, `QPS burst limit when making requests to Kubernetes apiserver`)
 
-	storage = flag.String("storage", "", `Specifies storage mode. Supported values: prometheus, checkpoint (default)`)
+	storage       = flag.String("storage", "", `Specifies storage mode. Supported values: prometheus, checkpoint (default)`)
+	metricsSource = flag.String("source", "metrics-server", "Specifies metrics source.  Supported values: metrics-server (default), datadog")
 	// prometheus history provider configs
 	historyLength       = flag.String("history-length", "8d", `How much time back prometheus have to be queried to get historical metrics`)
 	historyResolution   = flag.String("history-resolution", "1h", `Resolution at which Prometheus is queried for historical metrics`)
@@ -58,6 +66,14 @@ var (
 	ctrPodNameLabel     = flag.String("container-pod-name-label", "pod_name", `Label name to look for container pod names`)
 	ctrNameLabel        = flag.String("container-name-label", "name", `Label name to look for container names`)
 	vpaObjectNamespace  = flag.String("vpa-object-namespace", apiv1.NamespaceAll, "Namespace to search for VPA objects and pod stats. Empty means all namespaces will be used.")
+
+	kubeClusterName    = flag.String("dd-cluster-name", ``, `kube_cluster_name to qualify metrics queries to.  Required with no default.`)
+	extraFilterTags    = flag.String("dd-extra-filter-tags", ``, `Comma-separated list of additional tag:values to filter metrics with.`)
+	extraReportingTags = flag.String("dd-extra-reporting-tags", ``, "Comma-separated list of tag keys to report with metrics")
+	clientApiSecrets   = flag.String("dd-keys-file", "/etc/datadog-client.json", "JSON file with apiKeyAuth, appKeyAuth keys and values.")
+	agentAddress       = flag.String("dd-agent", ``, "host:port for dogstatsd")
+	cpuQosMod          = flag.Bool("dd-cpu-guaranteed-qos", false, `Set requests=ceil(reqPercentile of cpu) to use Guaranteed QoS CPU`)
+	reqPercentile      = flag.Float64("dd-request-percentile", 95.0, "Percentile of usage to set requests to.")
 )
 
 // Aggregation configuration flags
@@ -72,18 +88,57 @@ func main() {
 	klog.InitFlags(nil)
 	kube_flag.InitFlags()
 	klog.V(1).Infof("Vertical Pod Autoscaler %s Recommender: %v", common.VerticalPodAutoscalerVersion, DefaultRecommenderName)
-
+	klog.V(1).Infof("Flags: %v, Environment: %v", os.Args, os.Environ())
 	config := common.CreateKubeConfigOrDie(*kubeconfig, float32(*kubeApiQps), int(*kubeApiBurst))
-
 	model.InitializeAggregationsConfig(model.NewAggregationsConfig(*memoryAggregationInterval, *memoryAggregationIntervalCount, *memoryHistogramDecayHalfLife, *cpuHistogramDecayHalfLife))
 
 	healthCheck := metrics.NewHealthCheck(*metricsFetcherInterval*5, true)
 	metrics.Initialize(*address, healthCheck)
-	metrics_recommender.Register()
-	metrics_quality.Register()
 
 	useCheckpoints := *storage != "prometheus"
-	recommender := routines.NewRecommender(config, *checkpointsGCInterval, useCheckpoints, *vpaObjectNamespace)
+	var metricsClient *input_metrics.MetricsClient
+
+	if len(*kubeClusterName) < 1 {
+		klog.Fatalf("--dd-cluster-name required for datadog metrics source.")
+	}
+	var extraApiTags []string = nil
+	if len(*extraFilterTags) > 0 {
+		extraApiTags = strings.Split(*extraFilterTags, ",")
+	}
+	var extraMetricsTags []string = nil
+	if len(*extraReportingTags) > 0 {
+		extraMetricsTags = strings.Split(*extraReportingTags, ",")
+	}
+
+	var agentAddr string
+	if len(*agentAddress) == 0 {
+		if agentAddr = os.Getenv("STATSD_URL"); agentAddr == "" {
+			statsdHost, statsdPort := "localhost", "8125"
+			if v := os.Getenv("DD_AGENT_HOST"); v != "" {
+				statsdHost = v
+			}
+			if v := os.Getenv("DD_DOGSTATSD_PORT"); v != "" {
+				statsdPort = v
+			}
+			agentAddr = net.JoinHostPort(statsdHost, statsdPort)
+		}
+	} else {
+		agentAddr = *agentAddress
+	}
+
+	client, err := statsd.New(agentAddr, statsd.WithNamespace("dd_vpa"), statsd.WithOriginDetection(), statsd.WithoutClientSideAggregation())
+	if err != nil {
+		klog.Fatalf("Failed creating agent: %v", err)
+	} else {
+		klog.V(2).Infof("Connected to agent at %v", agentAddr)
+	}
+	metrics_recommender.Register(client, extraMetricsTags)
+	metrics_quality.Register()
+	ddClient := input_metrics.NewMetricsClient(input_metrics.NewDatadogClient(*snapshotHistoryInterval, *kubeClusterName, *clientApiSecrets, extraApiTags), *vpaObjectNamespace)
+	metricsClient = &ddClient
+
+	recommender := routines.NewRecommender(config, *checkpointsGCInterval, useCheckpoints, *vpaObjectNamespace,
+		*cpuQosMod, *reqPercentile, *metricsClient)
 
 	promQueryTimeout, err := time.ParseDuration(*queryTimeout)
 	if err != nil {
